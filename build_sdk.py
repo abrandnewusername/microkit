@@ -438,18 +438,22 @@ SUPPORTED_BOARDS = (
             "hello": Path("example/polarfire/hello")
         }
     ),
-    # BoardInfo(
-    #     name="x86_64",
-    #     arch=BoardArch.X86_64,
-    #     gcc_flags = "",
-    #     loader_link_address=0x80200000,
-    #     kernel_options = {
-    #         "KernelIsMCS": True,
-    #         "KernelPlatform": "pc99",
-    #         "KernelSel4Arch": "x86_64",
-    #     },
-    #     examples = {}
-    # ),
+    BoardInfo(
+        name="x86_64_virt",
+        arch=BoardArch.X86_64,
+        gcc_flags = "GCC_MARCH=nehalem",
+        loader_link_address=0x10000000, # 256MB
+        kernel_options = {
+            "KernelIsMCS": True,
+            "KernelPlatform": "pc99",
+            "KernelSel4Arch": "x86_64",
+            "KernelVTX": True,
+            "KernelX86MicroArch": "nehalem",
+        },
+        examples = {
+            "hello": Path("example/x86_64_virt/hello")
+        }
+    ),
 )
 
 SUPPORTED_CONFIGS = (

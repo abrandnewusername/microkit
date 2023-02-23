@@ -1,0 +1,37 @@
+# This file describes the machine simulated by qemu running with this
+# command line:
+#
+# qemu-system-x86_64                                                                         \
+#        -machine "q35,accel=kvm,kernel-irqchip=split"                                       \
+#        -cpu "Nehalem,+fsgsbase,+pdpe1gb,+pcid,+invpcid,+xsave,+xsaves,+xsaveopt,+vmx,+vme" \
+#        -m "4G"                                                                             \
+#        -display none                                                                       \
+#        -serial mon:stdio                                                                   \
+#        -device intel-iommu
+#
+---
+# Physical memory regions.
+memory:
+  - base: 0x100000
+    size: 0x7fedf000
+  - base: 0x100000000
+    size: 0x80000000
+
+# Kernel devices.
+kdevs:
+  - name: apic
+    base: 0xfee00000
+    size: 0x1000
+  - name: ioapic.0
+    base: 0xfec00000
+    size: 0x1000
+  - name: drhu.0
+    base: 0xfed90000
+    size: 0x1000
+
+# VT-d RMRRs.
+rmrrs: []
+
+# Bootinfo data:
+bootinfo:
+  numIOPTLevels: 3
