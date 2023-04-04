@@ -31,7 +31,7 @@ SEL4CP_EPOCH = 1616367257
 KERNEL_CONFIG_TYPE = Union[bool, str]
 KERNEL_OPTIONS = Dict[str, KERNEL_CONFIG_TYPE]
 
-X86_64_TOOLCHAIN = ""
+X86_64_TOOLCHAIN = "x86_64-linux-gnu-"
 AARCH64_TOOLCHAIN = "aarch64-none-elf-"
 # We can use the same toolchain for both 32-bit and 64-bit RISC-V builds.
 RISCV_TOOLCHAIN = "riscv64-unknown-elf-"
@@ -700,6 +700,8 @@ def build_lib_component(
         arch_args = f"ARCH=riscv64 TOOLCHAIN={RISCV_TOOLCHAIN}"
     elif board.arch == BoardArch.RISCV32:
         arch_args = f"ARCH=riscv32 TOOLCHAIN={RISCV_TOOLCHAIN}"
+    elif board.arch == BoardArch.X86_64:
+        arch_args = f"ARCH=x86_64 TOOLCHAIN={X86_64_TOOLCHAIN}"
     else:
         raise Exception(f"Unexpected arch given: {board.arch}", board.arch)
 
