@@ -121,7 +121,11 @@ sel4cp_pd_restart(sel4cp_id pd, uintptr_t entry_point)
     seL4_Error err;
     seL4_UserContext ctxt;
     memzero(&ctxt, sizeof(seL4_UserContext));
+#ifdef ARCH_x86_64
+    ctxt.rip = entry_point;
+#else
     ctxt.pc = entry_point;
+#endif
     err = seL4_TCB_WriteRegisters(
         BASE_TCB_CAP + pd,
         true,
