@@ -38,6 +38,7 @@ The following abreviations are used in the source code:
 """
 import sys
 import os
+import munch
 from argparse import ArgumentParser
 from pathlib import Path
 from dataclasses import dataclass
@@ -57,6 +58,9 @@ from sel4coreplat.sel4 import (
     Sel4Invocation,
     Sel4ARMPageTableMap,
     Sel4RISCVPageTableMap,
+    Sel4X86PDPTMap,
+    Sel4X86PageDirectoryMap,
+    Sel4X86PageTableMap,
     Sel4TcbSetSchedParams,
     Sel4TcbSetSpace,
     Sel4TcbSetIpcBuffer,
@@ -100,6 +104,7 @@ from sel4coreplat.sel4 import (
     SEL4_ARM_PAGE_CACHEABLE,
     SEL4_RISCV_DEFAULT_VMATTRIBUTES,
     SEL4_RISCV_EXECUTE_NEVER,
+    SEL4_X86_DEFAULT_VMATTRIBUTES,
     SEL4_OBJECT_TYPE_NAMES,
 )
 from sel4coreplat.sysxml import ProtectionDomain, xml2system, SystemDescription, PlatformDescription
@@ -547,17 +552,20 @@ class InitSystem:
 
     def allocate_objects(self, kernel_config: KernelConfig, object_type: int, names: List[str], size: Optional[int] = None) -> List[KernelObject]:
         count = len(names)
-        if object_type in FIXED_OBJECT_SIZES:
-            assert size is None
-            alloc_size = Sel4Object(object_type).get_size(kernel_config)
-            api_size = 0
-        elif object_type in (Sel4Object.CNode, Sel4Object.SchedContext):
+
+        if object_type in (Sel4Object.CNode, Sel4Object.SchedContext):
+            # Objects of variable size.
             assert size is not None
             assert is_power_of_two(size)
             api_size = int(log2(size))
             alloc_size = size * SEL4_SLOT_SIZE
         else:
-            raise Exception(f"Invalid object type: {object_type}")
+            # Objects of fixed size.
+            assert size is None
+            api_size = 0
+            alloc_size = Sel4Object(object_type).get_size(kernel_config)
+            if alloc_size is None:
+                raise Exception(f"Invalid object type: {object_type}")
         allocation = self._kao.alloc(alloc_size, count)
         base_cap_slot = self._cap_slot
         self._cap_slot += count
@@ -639,6 +647,7 @@ def build_system(
         invocation_table_size: int,
         system_cnode_size: int,
         search_paths: List[Path],
+        x86_machine,
     ) -> BuiltSystem:
     """Build system as description by the inputs, with a 'BuiltSystem' object as the output."""
     assert is_power_of_two(system_cnode_size)
@@ -688,6 +697,7 @@ def build_system(
     available_memory, kernel_boot_region = emulate_kernel_boot_partial(
         kernel_config,
         kernel_elf,
+        x86_machine,
     )
 
     # The kernel relies on the reserved region being allocated above the kernel
@@ -749,7 +759,8 @@ def build_system(
         kernel_elf,
         initial_task_phys_region,
         initial_task_virt_region,
-        reserved_region
+        reserved_region,
+        x86_machine
     )
 
     for ut in kernel_boot_info.untyped_objects:
@@ -1247,6 +1258,11 @@ def build_system(
         # Allocating for 3-level page table
         d_names = [f"PageTable: PD/VM={names[idx]} VADDR=0x{vaddr:x}" for idx, vaddr in ds]
         d_objects = init_system.allocate_objects(kernel_config, Sel4Object.PageTable, d_names)
+    elif kernel_config.arch == KernelArch.X86_64:
+        ud_names = [f"PageDirectoryPointerTable: PD/VM={names[idx]} VADDR=0x{vaddr:x}" for idx, vaddr in uds]
+        ud_objects = init_system.allocate_objects(kernel_config, Sel4Object.PdPt, ud_names)
+        d_names = [f"PageDirectory: PD/VM={names[idx]} VADDR=0x{vaddr:x}" for idx, vaddr in ds]
+        d_objects = init_system.allocate_objects(kernel_config, Sel4Object.PageDirectory, d_names)
     else:
         raise Exception(f"Unexpected kernel architecture: {kernel_config.arch}")
 
@@ -1657,6 +1673,13 @@ def build_system(
                 (Sel4ARMPageTableMap, ds, d_objects),
                 (Sel4ARMPageTableMap, pts, pt_objects),
             ]
+    elif kernel_config.arch == KernelArch.X86_64:
+        default_vm_attributes = SEL4_RISCV_DEFAULT_VMATTRIBUTES
+        vspace_invocations = [
+            (Sel4X86PDPTMap, uds, ud_objects),
+            (Sel4X86PageDirectoryMap, ds, d_objects),
+            (Sel4X86PageTableMap, pts, pt_objects),
+        ]
     else:
         raise Exception(f"Unexpected kernel architecture: {kernel_config.arch}")
 
@@ -1857,6 +1880,7 @@ def main() -> int:
     parser.add_argument("--board", required=True, choices=available_boards)
     parser.add_argument("--config", required=True)
     parser.add_argument("--search-path", nargs='*', type=Path)
+    parser.add_argument("--x86-machine")
     args = parser.parse_args()
 
     board_path = boards_path / args.board
@@ -1926,6 +1950,17 @@ def main() -> int:
     else:
         arm_pa_size_bits = None
 
+    # Load the x86 machine description file.
+    if sel4_arch == "x86_64":
+        if not args.x86_machine:
+            raise UserError("Tool argument --x86-machine is mandatory on x86")
+        with open(args.x86_machine, "r") as f:
+            x86_machine = munch.munchify(yaml_load(f, Loader=YamlLoader))
+    else:
+        if args.x86_machine:
+            raise UserError("Tool argument --x86-machine is only valid for x86")
+        x86_machine = None
+
     kernel_config = KernelConfig(
         arch = arch,
         word_size = sel4_config["WORD_SIZE"],
@@ -1967,6 +2002,7 @@ def main() -> int:
             invocation_table_size,
             system_cnode_size,
             search_paths,
+            x86_machine,
         )
         print(f"BUILT: {system_cnode_size=} {built_system.number_of_system_caps=} {invocation_table_size=} {built_system.invocation_data_size=}")
         if (built_system.number_of_system_caps <= system_cnode_size and
