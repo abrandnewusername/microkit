@@ -104,7 +104,8 @@ from sel4coreplat.sel4 import (
 )
 from sel4coreplat.sysxml import ProtectionDomain, xml2system, SystemDescription, PlatformDescription
 from sel4coreplat.sysxml import SysMap, SysMemoryRegion # This shouldn't be needed here as such
-from sel4coreplat.loader import Loader, _check_non_overlapping
+from sel4coreplat.loader import Loader
+from sel4coreplat.x86loader import X86Loader
 
 # This is a workaround for: https://github.com/indygreg/PyOxidizer/issues/307
 # Basically, pyoxidizer generates code that results in argv[0] being set to None.
@@ -2093,8 +2094,14 @@ def main() -> int:
         for idx, invocation in enumerate(built_system.system_invocations):
             f.write(f"    0x{idx:04x} {invocation_to_str(kernel_config, invocation, cap_lookup)}\n")
 
+    # Use a different loader on x86.
+    if arch == KernelArch.X86_64:
+        LoaderClass = X86Loader
+    else:
+        LoaderClass = Loader
+
     # FIXME: Verify that the regions do not overlap!
-    loader = Loader(
+    loader = LoaderClass(
         kernel_config,
         loader_elf_path,
         kernel_elf,
