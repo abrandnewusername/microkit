@@ -700,16 +700,24 @@ def build_system(
         x86_machine,
     )
 
-    # The kernel relies on the reserved region being allocated above the kernel
-    # boot/ELF region, so we have the end of the kernel boot region as the lower
-    # bound for allocating the reserved region.
-    reserved_base = available_memory.allocate_from(reserved_size, kernel_boot_region.end)
-    assert kernel_boot_region.base < reserved_base
-    # The kernel relies on the initial task being allocated above the reserved
-    # region, so we have the address of the end of the reserved region as the
-    # lower bound for allocating the initial task.
-    initial_task_phys_base = available_memory.allocate_from(initial_task_size, reserved_base + reserved_size)
-    assert reserved_base < initial_task_phys_base
+    if kernel_config.arch == KernelArch.X86_64:
+        # On x86 the kernel loads the inittask as a multiboot module and
+        # copies it immediately after itself. We need to swap the
+        # allocation order to match the kernel.
+        initial_task_phys_base = available_memory.allocate(initial_task_size)
+        reserved_base = available_memory.allocate(reserved_size)
+        assert initial_task_phys_base < reserved_base
+    else:
+        # The kernel relies on the reserved region being allocated above the kernel
+        # boot/ELF region, so we have the end of the kernel boot region as the lower
+        # bound for allocating the reserved region.
+        reserved_base = available_memory.allocate_from(reserved_size, kernel_boot_region.end)
+        assert kernel_boot_region.base < reserved_base
+        # The kernel relies on the initial task being allocated above the reserved
+        # region, so we have the address of the end of the reserved region as the
+        # lower bound for allocating the initial task.
+        initial_task_phys_base = available_memory.allocate_from(initial_task_size, reserved_base + reserved_size)
+        assert reserved_base < initial_task_phys_base
 
     initial_task_phys_region = MemoryRegion(initial_task_phys_base, initial_task_phys_base + initial_task_size)
     initial_task_virt_region = virt_mem_region_from_elf(monitor_elf, kernel_config.minimum_page_size)
