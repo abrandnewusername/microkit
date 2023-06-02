@@ -1715,7 +1715,12 @@ def emulate_kernel_boot(
     if kernel_config.arch == KernelArch.X86_64:
         page_cap_count += 1
     first_untyped_cap = fixed_cap_count + paging_cap_count + sched_control_cap_count + page_cap_count
-    schedcontrol_cap = fixed_cap_count + paging_cap_count
+
+    # On X86 the schedcontrol caps are created before the paging caps.
+    if kernel_config.arch == KernelArch.X86_64:
+        schedcontrol_cap = fixed_cap_count
+    else:
+        schedcontrol_cap = fixed_cap_count + paging_cap_count
 
     # Determining seL4_MaxUntypedBits
     if kernel_config.arch == KernelArch.AARCH64 or kernel_config.arch == KernelArch.X86_64:
