@@ -1,0 +1,42 @@
+---
+# Physical memory regions.
+memory:
+  - base: 0x100000
+    size: 0x6968f000
+  - base: 0x6c018000
+    size: 0x1c1000
+  - base: 0x6ed13000
+    size: 0x12ed000
+  - base: 0x100000000
+    size: 0x780000000
+
+# Kernel devices.
+kdevs:
+  - name: apic
+    base: 0xfee00000
+    size: 0x1000
+  - name: ioapic.0
+    base: 0xfec00000
+    size: 0x1000
+  - name: drhu.0
+    base: 0xc5ffc000
+    size: 0x1000
+  - name: drhu.1
+    base: 0xe0ffc000
+    size: 0x1000
+  - name: drhu.2
+    base: 0xfbffc000
+    size: 0x1000
+  - name: drhu.3
+    base: 0xaaffc000
+    size: 0x1000
+
+# VT-d RMRRs:
+rmrrs:
+  - device: 0xa0
+    base: 0x6e807000
+    limit: 0x6e817fff
+
+# Definitions from the bootinfo structure:
+bootinfo:
+  numIOPTLevels: 4
