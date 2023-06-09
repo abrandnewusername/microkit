@@ -2107,6 +2107,10 @@ def main() -> int:
         f.write(f"    # of page caps      : {built_system.kernel_boot_info.page_cap_count:8,d}\n")
         f.write(f"    # of untyped objects: {len(built_system.kernel_boot_info.untyped_objects):8,d}\n")
         f.write("\n")
+        f.write("# Untyped objects\n")
+        for num,ut in enumerate(built_system.kernel_boot_info.untyped_objects):
+            f.write(f"     untypedList[{num:#010x}]        = slot: {ut.cap:#010x}, paddr: {ut.region.base:#018x} - {ut.region.end:#018x} ({'device' if ut.is_device else 'normal'}) bits: {ut.size_bits:#010x}\n")
+        f.write("\n")
         f.write("# Loader Regions\n\n")
         for region in built_system.regions:
             f.write(f"       {region}\n")
