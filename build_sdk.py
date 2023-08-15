@@ -214,6 +214,7 @@ SUPPORTED_BOARDS = (
             "KernelIsMCS": True,
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
             "QEMU_MEMORY": 2048,
         },
         examples = {}
@@ -293,6 +294,7 @@ SUPPORTED_BOARDS = (
             "KernelPlatform": "odroidc4",
             "KernelIsMCS": True,
             "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
         },
         examples = {}
     ),
