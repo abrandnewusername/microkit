@@ -83,11 +83,8 @@ class Sel4Object(IntEnum):
     LargePage = 8
     HugePage = 9
     PageTable = 10
-    PageDirectory = 11
-    PageUpperDirectory = 12
-    PageGlobalDirectory = 13
-    Vspace = 14
-    Vcpu = 15
+    Vspace = 11
+    Vcpu = 12
 
     def get_id(self, kernel_config: KernelConfig) -> int:
         if kernel_config.arch == KernelArch.AARCH64:
@@ -128,20 +125,16 @@ class Sel4Object(IntEnum):
 # objects will look different there.
 AARCH64_OBJECTS = {
     Sel4Object.HugePage: 7,
-    Sel4Object.PageUpperDirectory: 8,
-    Sel4Object.PageGlobalDirectory: 9,
-    Sel4Object.SmallPage: 10,
-    Sel4Object.LargePage: 11,
-    Sel4Object.PageTable: 12,
-    Sel4Object.PageDirectory: 13,
-    Sel4Object.Vcpu: 14,
-     # A VSpace on AArch64 is represented by a PageGlobalDirectory
-    Sel4Object.Vspace: 9,
+     # A VSpace on AArch64 is represented by a PageTable
+    Sel4Object.Vspace: 8,
+    Sel4Object.SmallPage: 9,
+    Sel4Object.LargePage: 10,
+    Sel4Object.PageTable: 11,
+    Sel4Object.Vcpu: 12,
 }
 
 AARCH64_HYP_OBJECTS = {
-     # A VSpace on AArch64 in hypervisor mode (assuming CONFIG_ARM_PA_SIZE_BITS
-     # is 40) is represented by a PageUpperDirectory.
+    # @ivanv: remove, same as AARCH64_OBJECTS
     Sel4Object.Vspace: 8,
 }
 
@@ -185,8 +178,6 @@ SEL4_OBJECT_TYPE_NAMES = {
     Sel4Object.LargePage: "SEL4_LARGE_PAGE_OBJECT",
     Sel4Object.HugePage: "SEL4_HUGE_PAGE_SIZE",
     Sel4Object.PageTable: "SEL4_PAGE_TABLE_OBJECT",
-    Sel4Object.PageDirectory: "SEL4_PAGE_DIRECTORY_OBJECT",
-    Sel4Object.PageUpperDirectory: "SEL4_PAGE_DIRECTORY_OBJECT",
     Sel4Object.Vspace: "SEL4_VSPACE_OBJECT",
     Sel4Object.Vcpu: "SEL4_VCPU_OBJECT",
 }
@@ -205,14 +196,11 @@ FIXED_OBJECT_SIZES = {
     Sel4Object.SmallPage: 1 << 12,
     Sel4Object.LargePage: 1 << 21,
     Sel4Object.PageTable: 1 << 12,
-    Sel4Object.PageDirectory: 1 << 12,
-    Sel4Object.PageUpperDirectory: 1 << 12,
     Sel4Object.Vcpu: 1 << 12,
 }
 
 AARCH64_HYP_OBJECT_SIZES = {
     Sel4Object.Vspace: 1 << 13,
-    Sel4Object.PageUpperDirectory: 1 << 13,
 }
 
 RISCV64_HYP_OBJECT_SIZES = {
@@ -742,52 +730,46 @@ class Sel4Label(IntEnum):
     ARMVSpaceInvalidate_Data = 37
     ARMVSpaceCleanInvalidate_Data = 38
     ARMVSpaceUnify_Instruction = 39
-    # ARM Page Upper Directory
-    ARMPageUpperDirectoryMap = 40
-    ARMPageUpperDirectoryUnmap = 41
-    # ARM Page Directory
-    ARMPageDirectoryMap = 42
-    ARMPageDirectoryUnmap = 43
     # ARM SMC call
-    ARMSMCCall = 44
+    ARMSMCCall = 40
     # ARM Page Table
-    ARMPageTableMap = 45
-    ARMPageTableUnmap = 46
+    ARMPageTableMap = 41
+    ARMPageTableUnmap = 42
     # ARM Page
-    ARMPageMap = 47
-    ARMPageUnmap = 48
-    ARMPageClean_Data = 49
-    ARMPageInvalidate_Data = 50
-    ARMPageCleanInvalidate_Data = 51
-    ARMPageUnify_Instruction = 52
-    ARMPageGetAddress = 53
+    ARMPageMap = 43
+    ARMPageUnmap = 44
+    ARMPageClean_Data = 45
+    ARMPageInvalidate_Data = 46
+    ARMPageCleanInvalidate_Data = 47
+    ARMPageUnify_Instruction = 48
+    ARMPageGetAddress = 49
     # ARM ASID
-    ARMASIDControlMakePool = 54
-    ARMASIDPoolAssign = 55
+    ARMASIDControlMakePool = 50
+    ARMASIDPoolAssign = 51
     # ARM VCPU
-    ARMVCPUSetTCB = 56
-    ARMVCPUInjectIRQ = 57
-    ARMVCPUReadReg = 58
-    ARMVCPUWriteReg = 59
-    ARMVCPUAckVPPI = 60
+    ARMVCPUSetTCB = 52
+    ARMVCPUInjectIRQ = 53
+    ARMVCPUReadReg = 54
+    ARMVCPUWriteReg = 55
+    ARMVCPUAckVPPI = 56
     # ARM IRQ
-    ARMIRQIssueIRQHandlerTrigger = 61
+    ARMIRQIssueIRQHandlerTrigger = 57
     # RISC-V Page Table
-    RISCVPageTableMap = 62
-    RISCVPageTableUnmap = 63
+    RISCVPageTableMap = 58
+    RISCVPageTableUnmap = 59
     # RISC-V Page
-    RISCVPageMap = 64
-    RISCVPageUnmap = 65
-    RISCVPageGetAddress = 66
+    RISCVPageMap = 60
+    RISCVPageUnmap = 61
+    RISCVPageGetAddress = 62
     # RISC-V ASID
-    RISCVASIDControlMakePool = 67
-    RISCVASIDPoolAssign = 68
+    RISCVASIDControlMakePool = 63
+    RISCVASIDPoolAssign = 64
     # RISC-V IRQ
-    RISCVIRQIssueIRQHandlerTrigger = 69
+    RISCVIRQIssueIRQHandlerTrigger = 65
     # RISC-V VCPU
-    RISCVVCPUSetTCB = 70
-    RISCVVCPUReadReg = 71
-    RISCVVCPUWriteReg = 72
+    RISCVVCPUSetTCB = 66
+    RISCVVCPUReadReg = 67
+    RISCVVCPUWriteReg = 68
 
     def get_id(self, kernel_config: KernelConfig) -> int:
         if kernel_config.arch == KernelArch.AARCH64:
@@ -816,29 +798,24 @@ AARCH64_LABELS = {
     Sel4Label.ARMVSpaceInvalidate_Data: 37,
     Sel4Label.ARMVSpaceCleanInvalidate_Data: 38,
     Sel4Label.ARMVSpaceUnify_Instruction: 39,
-    # ARM Page Upper Directory
-    Sel4Label.ARMPageUpperDirectoryMap: 40,
-    Sel4Label.ARMPageUpperDirectoryUnmap: 41,
-    # ARM Page Directory
-    Sel4Label.ARMPageDirectoryMap: 42,
-    Sel4Label.ARMPageDirectoryUnmap: 43,
-    Sel4Label.ARMSMCCall: 44,
+    # ARM SMC call forwarding
+    Sel4Label.ARMSMCCall: 40,
     # ARM Page table
-    Sel4Label.ARMPageTableMap: 45,
-    Sel4Label.ARMPageTableUnmap: 46,
+    Sel4Label.ARMPageTableMap: 41,
+    Sel4Label.ARMPageTableUnmap: 42,
     # ARM Page
-    Sel4Label.ARMPageMap: 47,
-    Sel4Label.ARMPageUnmap: 48,
-    Sel4Label.ARMPageClean_Data: 49,
-    Sel4Label.ARMPageInvalidate_Data: 50,
-    Sel4Label.ARMPageCleanInvalidate_Data: 51,
-    Sel4Label.ARMPageUnify_Instruction: 52,
-    Sel4Label.ARMPageGetAddress: 53,
+    Sel4Label.ARMPageMap: 43,
+    Sel4Label.ARMPageUnmap: 44,
+    Sel4Label.ARMPageClean_Data: 45,
+    Sel4Label.ARMPageInvalidate_Data: 46,
+    Sel4Label.ARMPageCleanInvalidate_Data: 47,
+    Sel4Label.ARMPageUnify_Instruction: 48,
+    Sel4Label.ARMPageGetAddress: 49,
     # ARM Asid
-    Sel4Label.ARMASIDControlMakePool: 54,
-    Sel4Label.ARMASIDPoolAssign: 55,
+    Sel4Label.ARMASIDControlMakePool: 50,
+    Sel4Label.ARMASIDPoolAssign: 51,
     # ARM IRQ
-    Sel4Label.ARMIRQIssueIRQHandlerTrigger: 56
+    Sel4Label.ARMIRQIssueIRQHandlerTrigger: 52
 }
 
 AARCH64_PA_44_HYP_LABELS = {
@@ -846,68 +823,62 @@ AARCH64_PA_44_HYP_LABELS = {
     Sel4Label.ARMVSpaceInvalidate_Data: 37,
     Sel4Label.ARMVSpaceCleanInvalidate_Data: 38,
     Sel4Label.ARMVSpaceUnify_Instruction: 39,
-    # ARM Page Upper Directory
-    Sel4Label.ARMPageUpperDirectoryMap: 40,
-    Sel4Label.ARMPageUpperDirectoryUnmap: 41,
-    # ARM Page Directory
-    Sel4Label.ARMPageDirectoryMap: 42,
-    Sel4Label.ARMPageDirectoryUnmap: 43,
-    Sel4Label.ARMSMCCall: 44,
+    # ARM SMC call forwarding
+    Sel4Label.ARMSMCCall: 40,
     # ARM Page table
-    Sel4Label.ARMPageTableMap: 45,
-    Sel4Label.ARMPageTableUnmap: 46,
+    Sel4Label.ARMPageTableMap: 41,
+    Sel4Label.ARMPageTableUnmap: 42,
     # ARM Page
-    Sel4Label.ARMPageMap: 47,
-    Sel4Label.ARMPageUnmap: 48,
-    Sel4Label.ARMPageClean_Data: 49,
-    Sel4Label.ARMPageInvalidate_Data: 50,
-    Sel4Label.ARMPageCleanInvalidate_Data: 51,
-    Sel4Label.ARMPageUnify_Instruction: 52,
-    Sel4Label.ARMPageGetAddress: 53,
+    Sel4Label.ARMPageMap: 43,
+    Sel4Label.ARMPageUnmap: 44,
+    Sel4Label.ARMPageClean_Data: 45,
+    Sel4Label.ARMPageInvalidate_Data: 46,
+    Sel4Label.ARMPageCleanInvalidate_Data: 47,
+    Sel4Label.ARMPageUnify_Instruction: 48,
+    Sel4Label.ARMPageGetAddress: 49,
     # ARM Asid
-    Sel4Label.ARMASIDControlMakePool: 54,
-    Sel4Label.ARMASIDPoolAssign: 55,
+    Sel4Label.ARMASIDControlMakePool: 50,
+    Sel4Label.ARMASIDPoolAssign: 51,
     # ARM VCPU
-    Sel4Label.ARMVCPUSetTCB: 56,
-    Sel4Label.ARMVCPUInjectIRQ: 57,
-    Sel4Label.ARMVCPUReadReg: 58,
-    Sel4Label.ARMVCPUWriteReg: 59,
-    Sel4Label.ARMVCPUAckVPPI: 60,
+    Sel4Label.ARMVCPUSetTCB: 52,
+    Sel4Label.ARMVCPUInjectIRQ: 53,
+    Sel4Label.ARMVCPUReadReg: 54,
+    Sel4Label.ARMVCPUWriteReg: 55,
+    Sel4Label.ARMVCPUAckVPPI: 56,
     # ARM IRQ
-    Sel4Label.ARMIRQIssueIRQHandlerTrigger: 61
+    Sel4Label.ARMIRQIssueIRQHandlerTrigger: 57
 }
 
+# @ivanv: PA_40 and PA_44 are the same now...
 AARCH64_PA_40_HYP_LABELS = {
     Sel4Label.ARMVSpaceClean_Data: 36,
     Sel4Label.ARMVSpaceInvalidate_Data: 37,
     Sel4Label.ARMVSpaceCleanInvalidate_Data: 38,
     Sel4Label.ARMVSpaceUnify_Instruction: 39,
-    # ARM Page Directory
-    Sel4Label.ARMPageDirectoryMap: 40,
-    Sel4Label.ARMPageDirectoryUnmap: 41,
-    Sel4Label.ARMSMCCall: 42,
+    # ARM SMC call forwarding
+    Sel4Label.ARMSMCCall: 40,
     # ARM Page table
-    Sel4Label.ARMPageTableMap: 43,
-    Sel4Label.ARMPageTableUnmap: 44,
+    Sel4Label.ARMPageTableMap: 41,
+    Sel4Label.ARMPageTableUnmap: 42,
     # ARM Page
-    Sel4Label.ARMPageMap: 45,
-    Sel4Label.ARMPageUnmap: 46,
-    Sel4Label.ARMPageClean_Data: 47,
-    Sel4Label.ARMPageInvalidate_Data: 48,
-    Sel4Label.ARMPageCleanInvalidate_Data: 49,
-    Sel4Label.ARMPageUnify_Instruction: 50,
-    Sel4Label.ARMPageGetAddress: 51,
+    Sel4Label.ARMPageMap: 43,
+    Sel4Label.ARMPageUnmap: 44,
+    Sel4Label.ARMPageClean_Data: 45,
+    Sel4Label.ARMPageInvalidate_Data: 46,
+    Sel4Label.ARMPageCleanInvalidate_Data: 47,
+    Sel4Label.ARMPageUnify_Instruction: 48,
+    Sel4Label.ARMPageGetAddress: 49,
     # ARM Asid
-    Sel4Label.ARMASIDControlMakePool: 52,
-    Sel4Label.ARMASIDPoolAssign: 53,
+    Sel4Label.ARMASIDControlMakePool: 50,
+    Sel4Label.ARMASIDPoolAssign: 51,
     # ARM VCPU
-    Sel4Label.ARMVCPUSetTCB: 54,
-    Sel4Label.ARMVCPUInjectIRQ: 55,
-    Sel4Label.ARMVCPUReadReg: 56,
-    Sel4Label.ARMVCPUWriteReg: 57,
-    Sel4Label.ARMVCPUAckVPPI: 58,
+    Sel4Label.ARMVCPUSetTCB: 52,
+    Sel4Label.ARMVCPUInjectIRQ: 53,
+    Sel4Label.ARMVCPUReadReg: 54,
+    Sel4Label.ARMVCPUWriteReg: 55,
+    Sel4Label.ARMVCPUAckVPPI: 56,
     # ARM IRQ
-    Sel4Label.ARMIRQIssueIRQHandlerTrigger: 59
+    Sel4Label.ARMIRQIssueIRQHandlerTrigger: 57
 }
 
 RISCV_LABELS = {
@@ -1211,30 +1182,6 @@ class Sel4IrqHandlerSetNotification(Sel4Invocation):
     label = Sel4Label.IRQSetIRQHandler
     irq_handler: int
     notification: int
-
-
-@dataclass
-class Sel4ARMPageUpperDirectoryMap(Sel4Invocation):
-    _object_type = "Page Upper Directory"
-    _method_name = "Map"
-    _extra_caps = ("vspace", )
-    label = Sel4Label.ARMPageUpperDirectoryMap
-    page_upper_directory: int
-    vspace: int
-    vaddr: int
-    attr: int
-
-
-@dataclass
-class Sel4ARMPageDirectoryMap(Sel4Invocation):
-    _object_type = "Page Directory"
-    _method_name = "Map"
-    _extra_caps = ("vspace", )
-    label = Sel4Label.ARMPageDirectoryMap
-    page_directory: int
-    vspace: int
-    vaddr: int
-    attr: int
 
 
 @dataclass
