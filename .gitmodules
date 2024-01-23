@@ -1,6 +1,6 @@
 [submodule "initialiser/rust-seL4"]
 	path = initialiser/rust-seL4
-	url = https://gitlab.com/coliasgroup/rust-seL4.git
+	url = https://github.com/seL4/rust-seL4.git
 [submodule "initialiser/capdl"]
 	path = initialiser/capdl
-	url = https://gitlab.com/coliasgroup/capdl.git
+	url = https://github.com/coliasgroup/capdl.git
