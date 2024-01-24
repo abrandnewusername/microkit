@@ -10,7 +10,7 @@ than in make.
 
 """
 from argparse import ArgumentParser
-from os import popen, system
+from os import popen, system, getcwd
 from shutil import copy
 from pathlib import Path
 from dataclasses import dataclass
@@ -674,7 +674,7 @@ def build_elf_component(
     else:
         raise Exception(f"Unexpected arch given: {board.arch}", board.arch)
 
-    build_cmd = f"BOARD={board.name} BUILD_DIR={build_dir.absolute()} {arch_args} {board.gcc_flags} SEL4_SDK={sel4_dir.absolute()} {defines_str} make -C {component_name}"
+    build_cmd = f"BOARD={board.name} BUILD_DIR={build_dir.absolute()} {arch_args} {board.gcc_flags} SEL4_SDK={sel4_dir.absolute()} {defines_str} make -C {component_name} all"
     r = system(build_cmd)
     if r != 0:
         raise Exception(
@@ -686,6 +686,46 @@ def build_elf_component(
     )
     dest.unlink(missing_ok=True)
     copy(elf, dest)
+
+def build_capdl_initialiser(
+    component_name: str,
+    root_dir: Path,
+    build_dir: Path,
+    board: BoardInfo,
+    config: ConfigInfo,
+    defines: List[Tuple[str, str]]
+) -> None:
+    """Build a specific ELF component.
+
+    Right now this is either the loader or the monitor
+    """
+    sel4_dir = root_dir / "board" / board.name / config.name
+    build_dir = build_dir / board.name / config.name / component_name
+    build_dir.mkdir(exist_ok=True, parents=True)
+    defines_str = " ".join(f"{k}={v}" for k, v in defines)
+    r = system(
+        f"BOARD={board.name} BUILD_DIR={build_dir.absolute()} SEL4_SDK={sel4_dir.absolute()} {defines_str} make  -C {component_name} all"
+    )
+    if r != 0:
+        raise Exception(
+            f"Error building: {component_name} for board: {board.name} config: {config.name}"
+        )
+    elf = build_dir / f"sel4-capdl-initializer.elf"
+    dest = root_dir / "board" / board.name / config.name / "elf" / f"initialiser.elf"
+    dest.unlink(missing_ok=True)
+    copy(elf, dest)
+    # Make output read-only
+    dest.chmod(0o444)
+
+    dest = root_dir / "board" / board.name / config.name / "elf" / "sel4-capdl-initializer-add-spec"
+    dest.unlink(missing_ok=True)
+    copy(build_dir / "sel4-capdl-initializer-add-spec", dest)
+    dest.chmod(0o555)
+
+    dest = root_dir / "board" / board.name / config.name / "object-sizes.yaml"
+    dest.unlink(missing_ok=True)
+    copy(build_dir / "object-sizes.yaml", dest)
+    dest.chmod(0o444)
 
 
 def build_doc(root_dir):
@@ -779,6 +819,7 @@ def build_sel4_config_component(
 def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("--sel4", type=Path, required=True)
+    parser.add_argument("--parse-capdl-tool", type=Path, required=True)
     parser.add_argument("--tool-rebuild", action="store_true", default=False, help="Force a rebuild of the Microkit tool")
     parser.add_argument("--tool-target-triple", default=get_tool_target_triple(), help="Target triple of the Microkit tool")
     parser.add_argument("--filter-boards", help="List of boards to build SDK for (comma separated)")
@@ -789,6 +830,9 @@ def main() -> None:
     if not sel4_dir.exists():
         raise Exception(f"sel4_dir: {sel4_dir} does not exist")
 
+    parse_capdl_tool = args.parse_capdl_tool.expanduser()
+    if not parse_capdl_tool.exists():
+        raise Exception(f"Path to parse capDL tool: {parse_capdl_tool} does not exist")
 
     root_dir = Path("release") / f"{NAME}-sdk-{VERSION}"
     tar_file = Path("release") / f"{NAME}-sdk-{VERSION}.tar.gz"
@@ -828,6 +872,9 @@ def main() -> None:
 
     copy(Path("LICENSE"), root_dir)
 
+    parse_capdl_tool_target = root_dir / "bin" / "parse-capdl"
+    copy(parse_capdl_tool, parse_capdl_tool_target)
+
     tool_target = root_dir / "bin" / "microkit"
 
     if not tool_target.exists() or args.tool_rebuild:
@@ -862,6 +909,9 @@ def main() -> None:
                 loader_defines.append(("PA_SIZE_BITS", pa_size_bits))
             build_elf_component("loader", root_dir, build_dir, board, config, loader_defines)
             build_elf_component("monitor", root_dir, build_dir, board, config, [])
+            build_elf_component("capdl-monitor", root_dir, build_dir, board, config, [])
+            initialiser_defines = [("KERNEL_INSTALL_DIR", build_dir.absolute() / board.name / config.name / "sel4/install")]
+            build_capdl_initialiser("capdl-initialiser", root_dir, build_dir, board, config, initialiser_defines)
             build_lib_component("libmicrokit", root_dir, build_dir, board, config)
         # Setup the examples
         for example, example_path in board.examples.items():
