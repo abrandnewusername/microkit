@@ -309,6 +309,7 @@ class ElfFile:
             f.seek(hdr.shoff)
             shents = []
             symtab_shent: Optional[ElfSectionHeader] = None
+            shstrtab_shent: Optional[int] = None
             for idx in range(hdr.shnum):
                 shent_raw = f.read(hdr.shentsize)
                 shent = ElfSectionHeader(**dict(zip(sh_fields, sh_fmt.unpack_from(shent_raw))))
@@ -319,19 +320,26 @@ class ElfFile:
                     assert symtab_shent is None
                     symtab_shent = shent
 
-            if shstrtab_shent is None:
+            if shstrtab_shent is None and hdr.shnum > 0:
                 raise InvalidElf("Unable to find string table section")
 
-            f.seek(shstrtab_shent.offset)
+            if shstrtab_shent is not None:
+                f.seek(shstrtab_shent.offset)
 
             # Microkit requires the symbol table to exist
-            assert symtab_shent is not None, f"The symbol table for the given ELF '{path}' could not be found"
-            f.seek(symtab_shent.offset)
-            _symtab = f.read(symtab_shent.size)
+            # assert symtab_shent is not None, f"The symbol table for the given ELF '{path}' could not be found"
+            # f.seek(symtab_shent.offset)
+            # @ivanv: revisit - these capdl specific changes have unintended side affects since this code
+            # parses all ELFs not just the initialiser
+            _symtab = []
+            if symtab_shent is not None:
+                f.seek(symtab_shent.offset)
+                _symtab = f.read(symtab_shent.size)
 
-            symtab_str = shents[symtab_shent.link]
-            f.seek(symtab_str.offset)
-            _symtab_str = f.read(symtab_str.size)
+            if len(shents):
+                symtab_str = shents[symtab_shent.link]
+                f.seek(symtab_str.offset)
+                _symtab_str = f.read(symtab_str.size)
 
             offset = 0
             elf._symbols = []

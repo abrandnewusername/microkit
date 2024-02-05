@@ -42,12 +42,21 @@ from argparse import ArgumentParser
 from pathlib import Path
 from dataclasses import dataclass
 from struct import pack, Struct
-from os import environ
+from os import environ, system, getcwd
 from math import log2, ceil
 from sys import argv, executable, stderr
 from json import load as json_load
 
 from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+# @ivanv: total hack since I don't have time to deal with Python's annoying
+# module system
+cwd = getcwd()
+sys.path.append(cwd + "/../../../capdl-initialiser/capdl/python-capdl-tool")
+import capdl
+from capdl.Object import *
+from microkit.cdlutil import register_aarch64_sizes, cdlsafe, UpperDir, LowerDir, PTable, PFrame, alignment_of_sort
 
 from microkit.elf import ElfFile
 from microkit.util import kb, mb, lsb, msb, round_up, round_down, mask_bits, is_power_of_two, MemoryRegion, UserError
@@ -141,6 +150,9 @@ MONITOR_CONFIG = MonitorConfig(
     bootstrap_invocation_data_symbol_name = "bootstrap_invocation_data",
     system_invocation_count_symbol_name = "system_invocation_count",
 )
+
+MONITOR_FAULT_EP_CAP_IDX = 2
+MONITOR_REPLY_CAP_IDX = 3
 
 # Will be either the notification or endpoint cap
 INPUT_CAP_IDX = 1
@@ -635,7 +647,235 @@ def _get_full_path(filename: Path, search_paths: List[Path]) -> Path:
         raise UserError(f"Error: unable to find program image: '{filename}'")
 
 
+def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_config: KernelConfig, monitor_path: Path) -> capdl.Spec:
+    def get_pgd_slot(x: int) -> int:
+        return (x >> alignment_of_sort[UpperDir]) & ((1 << 9) - 1)
+
+    def get_pud_slot(x: int) -> int:
+        return (x >> alignment_of_sort[LowerDir]) & ((1 << 9) - 1)
+
+    def get_pagedir_slot(x: int) -> int:
+        return (x >> alignment_of_sort[PTable]) & ((1 << 9) - 1)
+
+    def get_pt_slot(x: int) -> int:
+        return (x >> alignment_of_sort[PFrame]) & ((1 << 9) - 1)
+
+    def arm_map_page(cdl_spec: capdl.Spec, pd_name: str, vspace: PGD, page_cap: capdl.Cap, vaddr: int):
+        assert isinstance(page_cap.referent, capdl.Frame)
+        page_size = page_cap.referent.size
+        assert page_size in [1 << 12, 1 << (12 + 9), 1 << (12 + 9 + 9)]
+        assert vaddr % page_size == 0, f"vaddr 0x{vaddr:x} not aligned to page size ({human_size_strict(page_size)})"
+
+        pgd_slot = get_pgd_slot(vaddr)
+        try:
+            pud = vspace[pgd_slot].referent
+        except KeyError:
+            pud = PUD(f"pud_{pd_name}_0x{mask_bits(vaddr, 12 + 9 + 9 + 9):x}")
+            cdl_spec.add_object(pud)
+            vspace[pgd_slot] = capdl.Cap(pud)
+        assert isinstance(pud, PUD)
+
+        pud_slot = get_pud_slot(vaddr)
+        if page_size == (1 << 30):
+            assert pud.slots.get(pud_slot) is None, f"1GiB page already mapped at virtual address {vaddr}"
+            pud[pud_slot] = page_cap
+            return
+        try:
+            pagedir = pud[pud_slot].referent
+        except KeyError:
+            pagedir = capdl.PageDirectory(f"pagedir_{pd_name}_0x{mask_bits(vaddr, 12 + 9 + 9):x}")
+            cdl_spec.add_object(pagedir)
+            pud[pud_slot] = capdl.Cap(pagedir)
+        assert isinstance(pagedir, capdl.PageDirectory)
+
+        pagedir_slot = get_pagedir_slot(vaddr)
+        if page_size == (1 << 21):
+            assert pagedir.slots.get(pagedir_slot) is None, f"2MiB page already mapped at virtual address {vaddr}"
+            pagedir[pagedir_slot] = page_cap
+            return
+        try:
+            pt = pagedir[pagedir_slot].referent
+        except KeyError:
+            pt = capdl.PageTable(f"pt_{pd_name}_0x{mask_bits(vaddr, 12 + 9):x}")
+            cdl_spec.add_object(pt)
+            pagedir[pagedir_slot] = capdl.Cap(pt)
+        assert isinstance(pt, capdl.PageTable)
+
+        pt_slot = get_pt_slot(vaddr)
+        assert pt.slots.get(pt_slot) is None, f"4KiB page already mapped at virtual address {vaddr}"
+        pt[pt_slot] = page_cap
+
+    register_aarch64_sizes()
+    cdl_spec = capdl.Spec(arch="aarch64")
+
+    # @ivanv: looks like there is a bug if multiple PDs have the same ELF
+    # @ivanv: what happens if the monitor faults?
+    # @ivanv: need to audit rights on the caps
+    # @ivanv: problem, a PD could fault before the monitor starts...
+
+    # Need to create an endpoint object
+    # The cap address of the endpoint object needs to be written to the fault_ep symbol
+    # in the monitor
+    # Each PD needs their TCB set to the fault endpoint badged
+
+    # Here we create the caps and kernel objects for the monitor, which acts as the default
+    # fault handler for all PDs
+    monitor_elf = capdl.ELF(str(monitor_path), name=monitor_path.name)
+    monitor_elf_spec = monitor_elf.get_spec(infer_asid=False)
+    print(f"monitor_elf_spec:")
+    print(f"{monitor_elf_spec.objs}")
+    monitor_tcb = next(x for x in monitor_elf_spec.objs if isinstance(x, capdl.TCB))
+    monitor_tcb.sp = monitor_elf.get_symbol_vaddr("_stack")
+    monitor_tcb.prio = 254
+    monitor_vspace = next(x for x in monitor_elf_spec.objs if isinstance(x, PGD))
+    monitor_tcb["vspace"] = capdl.Cap(monitor_vspace)
+    cdl_spec.merge(monitor_elf_spec)
+
+    monitor_cspace = capdl.CNode(f"cspace_monitor", size_bits=PD_CAP_BITS)
+    cdl_spec.add_object(monitor_cspace)
+    monitor_cspace[VSPACE_CAP_IDX] = capdl.Cap(monitor_vspace)
+    # @ivanv: what is PD_CAP_BITS, what is guard_size?
+    monitor_tcb["cspace"] = capdl.Cap(monitor_cspace, guard_size=kernel_config.cap_address_bits - PD_CAP_BITS)
+
+    monitor_fault_ep = capdl.Endpoint("monitor_fault_ep")
+    cdl_spec.add_object(monitor_fault_ep)
+    monitor_cspace[MONITOR_FAULT_EP_CAP_IDX] = capdl.Cap(monitor_fault_ep, read=True, write=True)
+
+    monitor_reply_object = capdl.RTReply("monitor_reply_object")
+    cdl_spec.add_object(monitor_reply_object)
+    monitor_cspace[MONITOR_REPLY_CAP_IDX] = capdl.Cap(monitor_reply_object, read=True, write=True)
+
+    monitor_ipc_vaddr = monitor_elf.get_symbol_vaddr("__sel4_ipc_buffer_obj")
+    monitor_tcb.addr = monitor_ipc_vaddr
+    monitor_page = capdl.Frame(f"ipcbuf_monitor")
+    cdl_spec.add_object(monitor_page)
+    monitor_ipc_page_cap = capdl.Cap(monitor_page, read=True, write=True)
+    arm_map_page(cdl_spec, "monitor", monitor_vspace, monitor_ipc_page_cap, monitor_ipc_vaddr)
+    monitor_tcb["ipc_buffer_slot"] = monitor_ipc_page_cap
+
+    # monitor_scheduling_context = capdl.SC("monitor_scheduling_context", period=100, budget=100, size_bits=PD_SCHEDCONTEXT_SIZE)
+    monitor_scheduling_context = capdl.SC("monitor_scheduling_context", period=100, budget=100)
+    monitor_tcb["sc_slot"] = capdl.Cap(monitor_scheduling_context, read=True, write=True)
+    cdl_spec.add_object(monitor_scheduling_context)
+    # @ivanv: shouldn't we be doing something with this scheduling control?
+    # monitor_scheduling_control = capdl.SchedControl("monitor_scheduling_control")
+    # cdl_spec.add_object(monitor_scheduling_control)
+
+    pd_to_cspace = {}
+    pd_to_ntfn = {}
+    # capdl for pds
+    for i, pd in enumerate(system.protection_domains):
+        path = _get_full_path(pd.program_image, search_paths).resolve()
+        elf = capdl.ELF(str(path), name=path.name)
+        elf_spec = elf.get_spec(infer_asid=False)
+        tcb = next(x for x in elf_spec.objs if isinstance(x, capdl.TCB))
+        tcb.sp = elf.get_symbol_vaddr("_stack")
+        tcb.prio = pd.priority
+        vspace = next(x for x in elf_spec.objs if isinstance(x, PGD))
+        tcb["vspace"] = capdl.Cap(vspace)
+        cdl_spec.merge(elf_spec)
+
+        cspace = capdl.CNode(f"cspace_{pd.name}", size_bits=PD_CAP_BITS)
+        cdl_spec.add_object(cspace)
+        cspace[VSPACE_CAP_IDX] = capdl.Cap(vspace)
+        tcb["cspace"] = capdl.Cap(cspace, guard_size=kernel_config.cap_address_bits - PD_CAP_BITS)
+        pd_to_cspace[pd] = cspace
+
+        ntfn = capdl.Notification(f"ntfn_{pd.name}")
+        cdl_spec.add_object(ntfn)
+        cspace[INPUT_CAP_IDX] = capdl.Cap(ntfn, read=True, write=True)
+        pd_to_ntfn[pd] = ntfn
+
+        cspace[FAULT_EP_CAP_IDX] = capdl.Cap(monitor_fault_ep, badge=i+1, read=True, write=True, grant=True, grantreply=True)
+        tcb.set_fault_ep_slot(fault_ep_slot=FAULT_EP_CAP_IDX, fault_ep=f"monitor_fault_ep", badge=i+1)
+
+        scheduling_context = capdl.SC(f"scheduling_context_{pd.name}", period=pd.period, budget=pd.budget)
+        tcb["sc_slot"] = capdl.Cap(scheduling_context, read=True, write=True)
+        cdl_spec.add_object(scheduling_context)
+        # scheduling_control = capdl.SchedControl(f"scheduling_control_{pd.name}")
+        # cdl_spec.add_object(scheduling_control)
+
+        vaddr = elf.get_symbol_vaddr("__sel4_ipc_buffer_obj")
+        tcb.addr = vaddr
+        page = capdl.Frame(f"ipcbuf_{pd.name}")
+        cdl_spec.add_object(page)
+        cap = capdl.Cap(page, read=True, write=True)
+        arm_map_page(cdl_spec, pd.name, vspace, cap, vaddr)
+        tcb["ipc_buffer_slot"] = cap
+
+        # monitor_cspace[5 + i] = capdl.Cap(tcb, read=True)
+
+        # The monitor needs access to the TCB of each PD
+        # @ivanv
+
+        # FIXME: this modifies the input elfs
+        # with open(path, "r+b") as f:
+        #     for setvar in pd.setvars:
+        #         if setvar.region_paddr is not None:
+        #             mr = next(mr for mr in system.memory_regions if mr.name == setvar.region_paddr)
+        #             value = mr_pages[mr][0].phys_addr
+        #         elif setvar.vaddr is not None:
+        #             value = setvar.vaddr
+        #         assert setvar.region_paddr is not None or setvar.vaddr is not None, setvar
+        #         symbol = elf._elf.get_section_by_name(".symtab").get_symbol_by_name(setvar.symbol)[0]
+        #         section = elf._elf.get_section(symbol["st_shndx"])
+        #         assert section["sh_type"] == "SHT_PROGBITS", "FIXME: symbols must have space reserved for them e.g. in .data, but not .bss"
+        #         segment = next(s for s in elf._elf.iter_segments() if s.section_in_segment(section))
+        #         offset = segment["p_offset"] + (symbol.entry["st_value"] - segment.header["p_vaddr"])
+        #         f.seek(offset)
+        #         assert value.bit_length() <= kernel_config.word_size
+        #         assert kernel_config.word_size == 64, "FIXME: we assume addresses are 64 bits"
+        #         f.write(pack("<Q", value))
+
+        mr_by_name = {mr.name: mr for mr in system.memory_regions}
+        for map in pd.maps:
+            mr = mr_by_name[map.mr]
+            for i in range(mr.page_count):
+                paddr = None if mr.phys_addr is None else mr.phys_addr + i * mr.page_size
+                page = capdl.Frame(f"mr_{map.mr}_{i}", paddr=paddr, size=mr.page_size)
+                cdl_spec.add_object(page)
+                cap = capdl.Cap(page, read="r" in map.perms, write="w" in map.perms, grant="x" in map.perms, cached=map.cached)
+                arm_map_page(cdl_spec, pd.name, vspace, cap, vaddr=map.vaddr + i * mr.page_size)
+
+        for sysirq in pd.irqs:
+            irq = capdl.IRQ(f"irq_{sysirq.irq}", number=sysirq.irq)
+            cdl_spec.add_object(irq)
+            cspace[BASE_IRQ_CAP + sysirq.id_] = capdl.Cap(irq, read=True)
+            cap = capdl.Cap(ntfn, read=True)
+            cap.set_badge(1 << sysirq.id_)
+            irq.set_notification(cap)
+
+        if pd.pp:
+            raise Exception("FIXME: deal with pds with pps")
+
+    for cc in system.channels:
+        pd_a = system.pd_by_name[cc.pd_a]
+        pd_b = system.pd_by_name[cc.pd_b]
+        pd_a_cspace = pd_to_cspace[pd_a]
+        pd_b_cspace = pd_to_cspace[pd_b]
+        pd_a_ntfn = pd_to_ntfn[pd_a]
+        pd_b_ntfn = pd_to_ntfn[pd_b]
+
+        pd_a_cap_idx = BASE_OUTPUT_NOTIFICATION_CAP + cc.id_a
+        pd_a_badge = 1 << cc.id_b
+        # FIXME: check rights
+        pd_a_cspace[pd_a_cap_idx] = capdl.Cap(pd_b_ntfn, read=True, write=True, badge=pd_a_badge)
+
+        pd_b_cap_idx = BASE_OUTPUT_NOTIFICATION_CAP + cc.id_b
+        pd_b_badge = 1 << cc.id_a
+        # FIXME: check rights
+        pd_b_cspace[pd_b_cap_idx] = capdl.Cap(pd_a_ntfn, read=True, write=True, badge=pd_b_badge)
+
+        # FIXME: deal with cases where pd_a or pd_b have pps
+
+    # Write out the TCB caps to the monitor symbol for fault handling.
+    # monitor_elf.write_symbol("tcbs", pack("<Q" + "Q" * len(tcb_caps), 0, *tcb_caps))
+
+    return cdl_spec
+
+
 def build_system(
+        is_capdl: bool,
         kernel_config: KernelConfig,
         kernel_elf: ElfFile,
         monitor_elf: ElfFile,
@@ -667,7 +907,12 @@ def build_system(
     virtual_machines = [pd.virtual_machine for pd in system.protection_domains if pd.virtual_machine is not None]
 
     ## Determine physical memory region used by the monitor
-    initial_task_size = phys_mem_region_from_elf(monitor_elf, kernel_config.minimum_page_size).size
+    if is_capdl:
+        # @ivanv: understand this change
+        initial_task_phys_regions_elf = phys_mem_regions_from_elf(monitor_elf, kernel_config.minimum_page_size)
+        initial_task_size = initial_task_phys_regions_elf[-1].end - initial_task_phys_regions_elf[0].base
+    else:
+        initial_task_size = phys_mem_region_from_elf(monitor_elf, kernel_config.minimum_page_size).size
 
     ## Get the elf files for each pd:
     pd_elf_files = {
@@ -707,7 +952,12 @@ def build_system(
     assert reserved_base < initial_task_phys_base
 
     initial_task_phys_region = MemoryRegion(initial_task_phys_base, initial_task_phys_base + initial_task_size)
-    initial_task_virt_region = virt_mem_region_from_elf(monitor_elf, kernel_config.minimum_page_size)
+    if is_capdl:
+        # @ivanv: understand this change
+        initial_task_virt_regions_elf = virt_mem_regions_from_elf(monitor_elf, kernel_config.minimum_page_size)
+        initial_task_virt_region = MemoryRegion(initial_task_virt_regions_elf[0].base, initial_task_virt_regions_elf[-1].end)
+    else:
+        initial_task_virt_region = virt_mem_region_from_elf(monitor_elf, kernel_config.minimum_page_size)
 
     reserved_region = MemoryRegion(reserved_base, reserved_base + reserved_size)
 
@@ -1876,6 +2126,7 @@ def main() -> int:
     parser.add_argument("-r", "--report", type=Path, default=Path("report.txt"))
     parser.add_argument("--board", required=True, choices=available_boards)
     parser.add_argument("--config", required=True)
+    parser.add_argument("--capdl", action="store_true")
     parser.add_argument("--search-path", nargs='*', type=Path)
     args = parser.parse_args()
 
@@ -1892,7 +2143,11 @@ def main() -> int:
     elf_path = SDK_DIR / "board" / args.board / args.config / "elf"
     loader_elf_path = elf_path / "loader.elf"
     kernel_elf_path = elf_path / "sel4.elf"
-    monitor_elf_path = elf_path / "monitor.elf"
+    normal_monitor_elf_path = elf_path / "monitor.elf"
+    capdl_monitor_elf_path = elf_path / "capdl-monitor.elf"
+    capdl_initialiser_elf_path = elf_path / "capdl-initialiser.elf"
+
+    monitor_elf_path = capdl_monitor_elf_path if args.capdl else normal_monitor_elf_path
 
     if not sel4_config_path.exists():
         print(f"Error: auto-generated kernel config '{sel4_config_path}' does not exist")
@@ -1906,8 +2161,14 @@ def main() -> int:
     if not kernel_elf_path.exists():
         print(f"Error: loader ELF '{kernel_elf_path}' does not exist")
         return 1
-    if not monitor_elf_path.exists():
+    if not normal_monitor_elf_path.exists():
         print(f"Error: monitor ELF '{monitor_elf_path}' does not exist")
+        return 1
+    if not capdl_monitor_elf_path.exists():
+        print(f"Error: capDL monitor ELF '{capdl_monitor_elf_path}' does not exist")
+        return 1
+    if not capdl_initialiser_elf_path.exists():
+        print(f"Error: capDL initialiser ELF '{capdl_initialiser_elf_path}' does not exist")
         return 1
 
     if not args.system.exists():
@@ -1976,17 +2237,44 @@ def main() -> int:
     system_description = xml2system(args.system, default_platform_description)
 
     monitor_elf = ElfFile.from_path(monitor_elf_path)
-    if len(monitor_elf.segments) > 1:
+    if not args.capdl and len(monitor_elf.segments) > 1:
         raise Exception(f"Monitor ({monitor_elf_path}) has {len(monitor_elf.segments)} segments; must only have one")
+
+    capdl_initialiser_elf = ElfFile.from_path(capdl_initialiser_elf_path)
+
+    if args.capdl:
+        CAPDL_SPEC_PATH = "spec.cdl"
+        print(f"monitor_elf_path: {monitor_elf_path}")
+        cdl_spec = generate_capdl(system_description, search_paths, kernel_config, monitor_elf_path)
+        with open(CAPDL_SPEC_PATH, "w") as f:
+            f.write('%s' % cdl_spec)
+        capdl_add_spec = SDK_DIR / "bin" / "capdl-spec-add"
+        parse_capdl_tool = SDK_DIR / "bin" / "parse-capdl"
+        object_sizes_path = board_path / args.config / "object-sizes.yaml"
+        # @ivanv: This process is bad, and needs to be revisited. I generally don't like how there are multiple
+        # tools to be invoked. Also the search path required is hard-coded...
+        # @ivanv: check that these commands are successful
+        r = system(f"cp {monitor_elf_path} {args.search_path[1]}")
+        assert r == 0
+        r = system(f"{parse_capdl_tool} --object-sizes={object_sizes_path} --json=spec.json {CAPDL_SPEC_PATH}")
+        assert r == 0
+        new_capdl_initialiser_elf_path = Path("capdl-test.elf")
+        capdl_add_spec_cmd = f"{capdl_add_spec} -e {capdl_initialiser_elf_path} -f spec.json -d {args.search_path[1]} -o {new_capdl_initialiser_elf_path}"
+        print(f"==={capdl_add_spec_cmd}")
+        r = system(capdl_add_spec_cmd)
+        assert r == 0
+
+    initialiser_elf = ElfFile.from_path(new_capdl_initialiser_elf_path) if args.capdl else monitor_elf
 
     invocation_table_size = kernel_config.minimum_page_size
     system_cnode_size = 2
 
     while True:
         built_system = build_system(
+            args.capdl,
             kernel_config,
             kernel_elf,
-            monitor_elf,
+            initialiser_elf,
             system_description,
             invocation_table_size,
             system_cnode_size,
@@ -2013,41 +2301,42 @@ def main() -> int:
     # we could have a bug, or the kernel could change. It that happens we are
     # in a bad spot! Things will break. So we write out this information so that
     # the monitor can double check this at run time.
-    _, untyped_info_size = monitor_elf.find_symbol(MONITOR_CONFIG.untyped_info_symbol_name)
-    max_untyped_objects = MONITOR_CONFIG.max_untyped_objects(untyped_info_size)
-    if len(built_system.kernel_boot_info.untyped_objects) > max_untyped_objects:
-        raise Exception(f"Too many untyped objects: monitor ({monitor_elf_path}) supports {max_untyped_objects:,d} regions."
-                        f"System has {len(built_system.kernel_boot_info.untyped_objects):,d} objects.")
-    untyped_info_header = MONITOR_CONFIG.untyped_info_header_struct.pack(
-            built_system.kernel_boot_info.untyped_objects[0].cap,
-            built_system.kernel_boot_info.untyped_objects[-1].cap + 1
-        )
-    untyped_info_object_data = []
-    for idx, ut in enumerate(built_system.kernel_boot_info.untyped_objects):
-        object_data = MONITOR_CONFIG.untyped_info_object_struct.pack(ut.base, ut.size_bits, ut.is_device)
-        untyped_info_object_data.append(object_data)
+    if not args.capdl:
+        _, untyped_info_size = monitor_elf.find_symbol(MONITOR_CONFIG.untyped_info_symbol_name)
+        max_untyped_objects = MONITOR_CONFIG.max_untyped_objects(untyped_info_size)
+        if len(built_system.kernel_boot_info.untyped_objects) > max_untyped_objects:
+            raise Exception(f"Too many untyped objects: monitor ({monitor_elf_path}) supports {max_untyped_objects:,d} regions."
+                            f"System has {len(built_system.kernel_boot_info.untyped_objects):,d} objects.")
+        untyped_info_header = MONITOR_CONFIG.untyped_info_header_struct.pack(
+                built_system.kernel_boot_info.untyped_objects[0].cap,
+                built_system.kernel_boot_info.untyped_objects[-1].cap + 1
+            )
+        untyped_info_object_data = []
+        for idx, ut in enumerate(built_system.kernel_boot_info.untyped_objects):
+            object_data = MONITOR_CONFIG.untyped_info_object_struct.pack(ut.base, ut.size_bits, ut.is_device)
+            untyped_info_object_data.append(object_data)
 
-    untyped_info_data = untyped_info_header + b''.join(untyped_info_object_data)
-    monitor_elf.write_symbol(MONITOR_CONFIG.untyped_info_symbol_name, untyped_info_data)
+        untyped_info_data = untyped_info_header + b''.join(untyped_info_object_data)
+        monitor_elf.write_symbol(MONITOR_CONFIG.untyped_info_symbol_name, untyped_info_data)
 
-    _, bootstrap_invocation_data_size = monitor_elf.find_symbol(MONITOR_CONFIG.bootstrap_invocation_data_symbol_name)
+        _, bootstrap_invocation_data_size = monitor_elf.find_symbol(MONITOR_CONFIG.bootstrap_invocation_data_symbol_name)
 
-    bootstrap_invocation_data = b''
-    for bootstrap_invocation in built_system.bootstrap_invocations:
-        bootstrap_invocation_data += bootstrap_invocation._get_raw_invocation(kernel_config)
-
-    if len(bootstrap_invocation_data) > bootstrap_invocation_data_size:
-        print("INTERNAL ERROR: bootstrap invocations too large", file=stderr)
-        print(f"bootstrap invocation array size   : {bootstrap_invocation_data_size:d}", file=stderr)
-        print(f"bootstrap invocation required size: {len(bootstrap_invocation_data):d}", file=stderr)
+        bootstrap_invocation_data = b''
         for bootstrap_invocation in built_system.bootstrap_invocations:
-            print(invocation_to_str(bootstrap_invocation, built_system.cap_lookup), file=stderr)
+            bootstrap_invocation_data += bootstrap_invocation._get_raw_invocation(kernel_config)
 
-        raise UserError("bootstrap invocations too large for monitor")
+        if len(bootstrap_invocation_data) > bootstrap_invocation_data_size:
+            print("INTERNAL ERROR: bootstrap invocations too large", file=stderr)
+            print(f"bootstrap invocation array size   : {bootstrap_invocation_data_size:d}", file=stderr)
+            print(f"bootstrap invocation required size: {len(bootstrap_invocation_data):d}", file=stderr)
+            for bootstrap_invocation in built_system.bootstrap_invocations:
+                print(invocation_to_str(bootstrap_invocation, built_system.cap_lookup), file=stderr)
 
-    monitor_elf.write_symbol(MONITOR_CONFIG.bootstrap_invocation_count_symbol_name, pack("<Q", len(built_system.bootstrap_invocations)))
-    monitor_elf.write_symbol(MONITOR_CONFIG.system_invocation_count_symbol_name, pack("<Q", len(built_system.system_invocations)))
-    monitor_elf.write_symbol(MONITOR_CONFIG.bootstrap_invocation_data_symbol_name, bootstrap_invocation_data)
+            raise UserError("bootstrap invocations too large for monitor")
+
+        monitor_elf.write_symbol(MONITOR_CONFIG.bootstrap_invocation_count_symbol_name, pack("<Q", len(built_system.bootstrap_invocations)))
+        monitor_elf.write_symbol(MONITOR_CONFIG.system_invocation_count_symbol_name, pack("<Q", len(built_system.system_invocations)))
+        monitor_elf.write_symbol(MONITOR_CONFIG.bootstrap_invocation_data_symbol_name, bootstrap_invocation_data)
 
     system_invocation_data_array = bytearray()
     for system_invocation in built_system.system_invocations:
@@ -2057,19 +2346,20 @@ def main() -> int:
     regions: List[Tuple[int, Union[bytes, bytearray]]] = [(built_system.reserved_region.base, system_invocation_data)]
     regions += [(r.addr, bytes([0] * r.offset) + r.data) for r in built_system.regions]
 
-    tcb_caps = built_system.tcb_caps
-    sched_caps = built_system.sched_caps
-    ntfn_caps = built_system.ntfn_caps
-    monitor_elf.write_symbol("fault_ep", pack("<Q", built_system.fault_ep_cap_address))
-    monitor_elf.write_symbol("reply", pack("<Q", built_system.reply_cap_address))
-    monitor_elf.write_symbol("tcbs", pack("<Q" + "Q" * len(tcb_caps), 0, *tcb_caps))
-    monitor_elf.write_symbol("scheduling_contexts", pack("<Q" + "Q" * len(sched_caps), 0, *sched_caps))
-    monitor_elf.write_symbol("notification_caps", pack("<Q" + "Q" * len(ntfn_caps), 0, *ntfn_caps))
-    names_array = bytearray([0] * (64 * 16))
-    for idx, pd in enumerate(system_description.protection_domains, 1):
-        nm = pd.name.encode("utf8")[:15]
-        names_array[idx * 16:idx * 16+len(nm)] = nm
-    monitor_elf.write_symbol("pd_names", names_array)
+    if not args.capdl:
+        tcb_caps = built_system.tcb_caps
+        sched_caps = built_system.sched_caps
+        ntfn_caps = built_system.ntfn_caps
+        monitor_elf.write_symbol("fault_ep", pack("<Q", built_system.fault_ep_cap_address))
+        monitor_elf.write_symbol("reply", pack("<Q", built_system.reply_cap_address))
+        monitor_elf.write_symbol("tcbs", pack("<Q" + "Q" * len(tcb_caps), 0, *tcb_caps))
+        monitor_elf.write_symbol("scheduling_contexts", pack("<Q" + "Q" * len(sched_caps), 0, *sched_caps))
+        monitor_elf.write_symbol("notification_caps", pack("<Q" + "Q" * len(ntfn_caps), 0, *ntfn_caps))
+        names_array = bytearray([0] * (64 * 16))
+        for idx, pd in enumerate(system_description.protection_domains, 1):
+            nm = pd.name.encode("utf8")[:15]
+            names_array[idx * 16:idx * 16+len(nm)] = nm
+        monitor_elf.write_symbol("pd_names", names_array)
 
 
     # B: The loader
@@ -2080,50 +2370,52 @@ def main() -> int:
     cap_lookup = built_system.cap_lookup
 
     # Reporting
-    with args.report.open("w") as f:
-        f.write("# Kernel Boot Info\n\n")
-        f.write(f"    # of fixed caps     : {built_system.kernel_boot_info.fixed_cap_count:8,d}\n")
-        f.write(f"    # of page table caps: {built_system.kernel_boot_info.paging_cap_count:8,d}\n")
-        f.write(f"    # of page caps      : {built_system.kernel_boot_info.page_cap_count:8,d}\n")
-        f.write(f"    # of untyped objects: {len(built_system.kernel_boot_info.untyped_objects):8,d}\n")
-        f.write("\n")
-        f.write("# Loader Regions\n\n")
-        for region in built_system.regions:
-            f.write(f"       {region}\n")
-        f.write("\n")
-        f.write("# Monitor (Initial Task) Info\n\n")
-        f.write(f"     virtual memory : {built_system.initial_task_virt_region}\n")
-        f.write(f"     physical memory: {built_system.initial_task_phys_region}\n")
-        f.write("\n")
-        f.write("# Allocated Kernel Objects Summary\n\n")
-        f.write(f"     # of allocated objects: {len(built_system.kernel_objects):,d}\n")
-        f.write("\n")
-        f.write("# Bootstrap Kernel Invocations Summary\n\n")
-        f.write(f"     # of invocations   : {len(built_system.bootstrap_invocations):10,d}\n")
-        f.write(f"     size of invocations: {len(bootstrap_invocation_data):10,d}\n")
-        f.write("\n")
-        f.write("# System Kernel Invocations Summary\n\n")
-        f.write(f"     # of invocations   : {len(built_system.system_invocations):10,d}\n")
-        f.write(f"     size of invocations: {len(system_invocation_data):10,d}\n")
-        f.write("\n")
-        f.write("# Allocated Kernel Objects Detail\n\n")
-        for ko in built_system.kernel_objects:
-            f.write(f"    {ko.name:50s} {ko.object_type} cap_addr={ko.cap_addr:x} phys_addr={ko.phys_addr:x}\n")
-        f.write("\n")
-        f.write("# Bootstrap Kernel Invocations Detail\n\n")
-        for idx, invocation in enumerate(built_system.bootstrap_invocations):
-            f.write(f"    0x{idx:04x} {invocation_to_str(kernel_config, invocation, cap_lookup)}\n")
-        f.write("\n")
-        f.write("# System Kernel Invocations Detail\n\n")
-        for idx, invocation in enumerate(built_system.system_invocations):
-            f.write(f"    0x{idx:04x} {invocation_to_str(kernel_config, invocation, cap_lookup)}\n")
+    if not args.capdl:
+        with args.report.open("w") as f:
+            f.write("# Kernel Boot Info\n\n")
+            f.write(f"    # of fixed caps     : {built_system.kernel_boot_info.fixed_cap_count:8,d}\n")
+            f.write(f"    # of page table caps: {built_system.kernel_boot_info.paging_cap_count:8,d}\n")
+            f.write(f"    # of page caps      : {built_system.kernel_boot_info.page_cap_count:8,d}\n")
+            f.write(f"    # of untyped objects: {len(built_system.kernel_boot_info.untyped_objects):8,d}\n")
+            f.write("\n")
+            f.write("# Loader Regions\n\n")
+            for region in built_system.regions:
+                f.write(f"       {region}\n")
+            f.write("\n")
+            f.write("# Monitor (Initial Task) Info\n\n")
+            f.write(f"     virtual memory : {built_system.initial_task_virt_region}\n")
+            f.write(f"     physical memory: {built_system.initial_task_phys_region}\n")
+            f.write("\n")
+            f.write("# Allocated Kernel Objects Summary\n\n")
+            f.write(f"     # of allocated objects: {len(built_system.kernel_objects):,d}\n")
+            f.write("\n")
+            f.write("# Bootstrap Kernel Invocations Summary\n\n")
+            f.write(f"     # of invocations   : {len(built_system.bootstrap_invocations):10,d}\n")
+            f.write(f"     size of invocations: {len(bootstrap_invocation_data):10,d}\n")
+            f.write("\n")
+            f.write("# System Kernel Invocations Summary\n\n")
+            f.write(f"     # of invocations   : {len(built_system.system_invocations):10,d}\n")
+            f.write(f"     size of invocations: {len(system_invocation_data):10,d}\n")
+            f.write("\n")
+            f.write("# Allocated Kernel Objects Detail\n\n")
+            for ko in built_system.kernel_objects:
+                f.write(f"    {ko.name:50s} {ko.object_type} cap_addr={ko.cap_addr:x} phys_addr={ko.phys_addr:x}\n")
+            f.write("\n")
+            f.write("# Bootstrap Kernel Invocations Detail\n\n")
+            for idx, invocation in enumerate(built_system.bootstrap_invocations):
+                f.write(f"    0x{idx:04x} {invocation_to_str(kernel_config, invocation, cap_lookup)}\n")
+            f.write("\n")
+            f.write("# System Kernel Invocations Detail\n\n")
+            for idx, invocation in enumerate(built_system.system_invocations):
+                f.write(f"    0x{idx:04x} {invocation_to_str(kernel_config, invocation, cap_lookup)}\n")
 
     # FIXME: Verify that the regions do not overlap!
     loader = Loader(
+        args.capdl,
         kernel_config,
         loader_elf_path,
         kernel_elf,
-        monitor_elf,
+        initialiser_elf,
         built_system.initial_task_phys_region.base,
         built_system.reserved_region,
         regions,

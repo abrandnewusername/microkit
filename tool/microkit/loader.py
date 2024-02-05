@@ -93,6 +93,7 @@ def _check_non_overlapping(regions: List[Tuple[int, bytes]]) -> None:
 class Loader:
 
     def __init__(self,
+        is_capdl: bool,
         kernel_config: KernelConfig,
         loader_elf_path: Path,
         kernel_elf: ElfFile,
@@ -164,21 +165,38 @@ class Loader:
         # (and indeed initial did support multi-segment ELF files). However
         # it adds significant complexity, and the calling functions enforce
         # only single-segment ELF files, so we keep things simple here.
-        assert len(initial_task_elf.segments) == 1
-        segment = initial_task_elf.segments[0]
-        assert segment.loadable
+        for segment in initial_task_elf.segments:
+            assert segment.loadable
 
-        inittask_first_vaddr = segment.virt_addr
-        inittask_last_vaddr = round_up(segment.virt_addr + segment.mem_size, kb(4))
+        offset = 0x70000000 + 0x200000
 
-        inittask_first_paddr = segment.phys_addr if initial_task_phys_base is None else initial_task_phys_base
-        inittask_p_v_offset = inittask_first_vaddr - inittask_first_paddr
+        inittask_first_vaddr: Optional[int] = None
+        inittask_last_vaddr: Optional[int] = None
+        inittask_first_paddr: Optional[int] = initial_task_elf.segments[0].phys_addr + offset
+        inittask_p_v_offset: Optional[int] = None
 
-        # NOTE: For now we include any zeroes. We could optimize in the future
-        self._regions.append((
-            inittask_first_paddr,
-            segment.data
-        ))
+        prev_segment_paddr = 0
+
+        for i, segment in enumerate(initial_task_elf.segments):
+            if segment.loadable:
+                # NOTE: For now we include any zeroes. We could optimize in the future
+
+                if inittask_first_vaddr is None or segment.virt_addr < inittask_first_vaddr:
+                    inittask_first_vaddr = segment.virt_addr
+
+                if inittask_last_vaddr is None or segment.virt_addr + segment.mem_size > inittask_last_vaddr:
+                    inittask_last_vaddr = round_up(segment.virt_addr + segment.mem_size, kb(4))
+
+                if inittask_p_v_offset is None:
+                    inittask_p_v_offset = segment.virt_addr - (segment.phys_addr + offset)
+                else:
+                    if inittask_p_v_offset != segment.virt_addr - (segment.phys_addr + offset):
+                        raise Exception("Kernel does not have constistent phys to virt offset")
+
+                self._regions.append((
+                    segment.phys_addr + offset,
+                    segment.data
+                ))
 
         # Determine the pagetable variables
         assert kernel_first_vaddr is not None
@@ -216,10 +234,13 @@ class Loader:
         assert(ui_p_reg_end > ui_p_reg_start)
         v_entry = initial_task_elf.entry
 
-        extra_device_addr_p = reserved_region.base
-        extra_device_size = reserved_region.size
-
-        self._regions += regions
+        if not is_capdl:
+            extra_device_addr_p = reserved_region.base
+            extra_device_size = reserved_region.size
+            self._regions += regions
+        else:
+            extra_device_addr_p = 0
+            extra_device_size = 0
 
         # In addition to checking that provided regions (e.g initial task
         # and PD ELFs) do not overlap, we must make sure they do not overlap

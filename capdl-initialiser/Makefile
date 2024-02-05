@@ -70,19 +70,6 @@ $(capdl_loader_intermediate):
 			-p $(capdl_loader_crate) \
 			--target $(rust_sel4_target)
 
-capdl_add_spec_to_loader_crate := sel4-capdl-initializer-add-spec
-capdl_add_spec_to_loader := $(BUILD_DIR)/$(capdl_add_spec_to_loader_crate)
-capdl_add_spec_to_loader_intermediate := $(BUILD_DIR)/capdl_add_spec_to_loader.intermediate
-
-$(capdl_add_spec_to_loader): $(capdl_add_spec_to_loader_intermediate)
-
-.INTERMDIATE: $(capdl_add_spec_to_loader_intermediate)
-$(capdl_add_spec_to_loader_intermediate):
-	$(common_env) \
-		cargo build \
-			$(CARGO_OPTIONS) \
-			-p $(capdl_add_spec_to_loader_crate)
-
 ### Demo
 
 # prebuilt_dir := prebuilt
@@ -99,7 +86,7 @@ $(object_sizes):
 # $(spec_json): $(CAPDL_SPEC) $(capdl_tool) $(object_sizes)
 # 	$(capdl_tool) --object-sizes=$(object_sizes) --json=$@ $(CAPDL_SPEC)
 
-all: $(object_sizes) $(capdl_loader_intermediate) $(capdl_add_spec_to_loader)
+all: $(object_sizes) $(capdl_loader_intermediate)
 
 # ifeq ($(SMALL),1)
 

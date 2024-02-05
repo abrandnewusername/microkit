@@ -204,8 +204,8 @@ SUPPORTED_BOARDS = (
             "KernelIsMCS": True,
             "KernelArmExportPTMRUser": True,
             "KernelArmExportPCNTUser": True,
-            "KernelArmHypervisorSupport": True,
-            "KernelArmVtimerUpdateVOffset": False,
+            # "KernelArmHypervisorSupport": True,
+            # "KernelArmVtimerUpdateVOffset": False,
             "QEMU_MEMORY": 2048,
         },
         examples = {}
@@ -469,11 +469,11 @@ SUPPORTED_BOARDS = (
 )
 
 SUPPORTED_CONFIGS = (
-    ConfigInfo(
-        name="release",
-        debug=False,
-        kernel_options = {},
-    ),
+    # ConfigInfo(
+    #     name="release",
+    #     debug=False,
+    #     kernel_options = {},
+    # ),
     ConfigInfo(
         name="debug",
         debug=True,
@@ -484,18 +484,18 @@ SUPPORTED_CONFIGS = (
         }
     ),
     # @ivanv: This has ARM specific kernel options
-    ConfigInfo(
-        name="benchmark",
-        debug=False,
-        kernel_options = {
-            "KernelDebugBuild": False,
-            "KernelVerificationBuild": False,
-            "KernelBenchmarks": "track_utilisation",
-            "KernelArmExportPMUUser": True,
-            # Enable signal fastpath for sDDF benchmarking
-            "KernelSignalFastpath": True,
-        },
-    ),
+    # ConfigInfo(
+    #     name="benchmark",
+    #     debug=False,
+    #     kernel_options = {
+    #         "KernelDebugBuild": False,
+    #         "KernelVerificationBuild": False,
+    #         "KernelBenchmarks": "track_utilisation",
+    #         "KernelArmExportPMUUser": True,
+    #         # Enable signal fastpath for sDDF benchmarking
+    #         "KernelSignalFastpath": True,
+    #     },
+    # ),
 )
 
 
@@ -687,6 +687,20 @@ def build_elf_component(
     dest.unlink(missing_ok=True)
     copy(elf, dest)
 
+
+def build_capdl_spec_add_tool(tool_target: Path, target_triple: str) -> None:
+    # @ivanv: this should be cleaned up if we end up upstreaming it
+    tool_build_dir = Path("tool/build").absolute()
+    r = system(
+        f"cd capdl-initialiser/rust-seL4 && cargo build --release --target-dir {tool_build_dir} --target {target_triple} -p sel4-capdl-initializer-add-spec"
+    )
+    assert r == 0
+
+    tool_output = f"./tool/build/{target_triple}/release/sel4-capdl-initializer-add-spec"
+
+    copy(tool_output, tool_target)
+
+
 def build_capdl_initialiser(
     component_name: str,
     root_dir: Path,
@@ -711,16 +725,16 @@ def build_capdl_initialiser(
             f"Error building: {component_name} for board: {board.name} config: {config.name}"
         )
     elf = build_dir / f"sel4-capdl-initializer.elf"
-    dest = root_dir / "board" / board.name / config.name / "elf" / f"initialiser.elf"
+    dest = root_dir / "board" / board.name / config.name / "elf" / f"capdl-initialiser.elf"
     dest.unlink(missing_ok=True)
     copy(elf, dest)
     # Make output read-only
-    dest.chmod(0o444)
+    dest.chmod(0o666)
 
-    dest = root_dir / "board" / board.name / config.name / "elf" / "sel4-capdl-initializer-add-spec"
-    dest.unlink(missing_ok=True)
-    copy(build_dir / "sel4-capdl-initializer-add-spec", dest)
-    dest.chmod(0o555)
+    # dest = root_dir / "board" / board.name / config.name / "elf" / "sel4-capdl-initializer-add-spec"
+    # dest.unlink(missing_ok=True)
+    # copy(build_dir / "sel4-capdl-initializer-add-spec", dest)
+    # dest.chmod(0o555)
 
     dest = root_dir / "board" / board.name / config.name / "object-sizes.yaml"
     dest.unlink(missing_ok=True)
@@ -880,6 +894,9 @@ def main() -> None:
     if not tool_target.exists() or args.tool_rebuild:
         test_tool()
         build_tool(tool_target, args.tool_target_triple)
+
+    capdl_spec_add_tool_targert = root_dir / "bin" / "capdl-spec-add"
+    build_capdl_spec_add_tool(capdl_spec_add_tool_targert, args.tool_target_triple)
 
     build_doc(root_dir)
 
