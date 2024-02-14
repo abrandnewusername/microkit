@@ -784,7 +784,6 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     else:
         raise Exception(f"Unexpected kernel architecture: {kernel_config.arch}")
 
-    print(f"capdl arch is: {capdl_arch}")
     cdl_spec = capdl.Spec(arch=capdl_arch)
     # @ivanv: looks like there is a bug if multiple PDs have the same ELF
     # @ivanv: what happens if the monitor faults?
@@ -2321,7 +2320,6 @@ def main() -> int:
 
     if args.capdl:
         CAPDL_SPEC_PATH = "spec.cdl"
-        print(f"monitor_elf_path: {monitor_elf_path}")
         cdl_spec = generate_capdl(system_description, search_paths, kernel_config, monitor_elf_path)
         with open(CAPDL_SPEC_PATH, "w") as f:
             f.write('%s' % cdl_spec)
