@@ -2337,7 +2337,6 @@ def main() -> int:
         assert r == 0
         new_capdl_initialiser_elf_path = Path("capdl-initialiser-with-spec.elf")
         capdl_add_spec_cmd = f"{capdl_add_spec} -e {capdl_initialiser_elf_path} -f spec.json -d {args.search_path[1]} -o {new_capdl_initialiser_elf_path}"
-        print(f"==={capdl_add_spec_cmd}")
         r = system(capdl_add_spec_cmd)
         assert r == 0
         r = system(f"cp {new_capdl_initialiser_elf_path} {args.search_path[1]}")
