@@ -2,3 +2,7 @@
 	path = capdl-initialiser/rust-seL4
 	url = https://github.com/Ivan-Velickovic/rust-seL4.git
 	branch = microkit-capdl-dev
+[submodule "capdl-initialiser/capdl"]
+	path = capdl-initialiser/capdl
+	url = https://github.com/coliasgroup/capdl.git
+	branch = coliasgroup
