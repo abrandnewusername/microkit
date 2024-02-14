@@ -56,7 +56,7 @@ cwd = getcwd()
 sys.path.append(cwd + "/../../../capdl-initialiser/capdl/python-capdl-tool")
 import capdl
 from capdl.Object import *
-from microkit.cdlutil import register_aarch64_sizes, cdlsafe, UpperDir, LowerDir, PTable, PFrame, alignment_of_sort
+from microkit.cdlutil import register_sizes_aarch64, register_sizes_x86_64, cdlsafe, UpperDir, LowerDir, PTable, PFrame, alignment_of_sort
 
 from microkit.elf import ElfFile
 from microkit.util import kb, mb, lsb, msb, round_up, round_down, mask_bits, is_power_of_two, MemoryRegion, UserError
@@ -648,25 +648,37 @@ def _get_full_path(filename: Path, search_paths: List[Path]) -> Path:
 
 
 def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_config: KernelConfig, monitor_path: Path) -> capdl.Spec:
-    def get_pgd_slot(x: int) -> int:
+    def aarch64_get_pgd_slot(x: int) -> int:
         return (x >> alignment_of_sort[UpperDir]) & ((1 << 9) - 1)
 
-    def get_pud_slot(x: int) -> int:
+    def aarch64_get_pud_slot(x: int) -> int:
         return (x >> alignment_of_sort[LowerDir]) & ((1 << 9) - 1)
 
-    def get_pagedir_slot(x: int) -> int:
+    def aarch64_get_pagedir_slot(x: int) -> int:
         return (x >> alignment_of_sort[PTable]) & ((1 << 9) - 1)
 
-    def get_pt_slot(x: int) -> int:
+    def aarch64_get_pt_slot(x: int) -> int:
         return (x >> alignment_of_sort[PFrame]) & ((1 << 9) - 1)
 
-    def arm_map_page(cdl_spec: capdl.Spec, pd_name: str, vspace: PGD, page_cap: capdl.Cap, vaddr: int):
+    def x86_64_get_pml4_slot(x: int) -> int:
+        return (x >> alignment_of_sort[UpperDir]) & ((1 << 9) - 1)
+
+    def x86_64_get_pdpt_slot(x: int) -> int:
+        return (x >> alignment_of_sort[LowerDir]) & ((1 << 9) - 1)
+
+    def x86_64_get_pd_slot(x: int) -> int:
+        return (x >> alignment_of_sort[PTable]) & ((1 << 9) - 1)
+
+    def x86_64_get_pt_slot(x: int) -> int:
+        return (x >> alignment_of_sort[PFrame]) & ((1 << 9) - 1)
+
+    def aarch64_map_page(cdl_spec: capdl.Spec, pd_name: str, vspace: PGD, page_cap: capdl.Cap, vaddr: int):
         assert isinstance(page_cap.referent, capdl.Frame)
         page_size = page_cap.referent.size
         assert page_size in [1 << 12, 1 << (12 + 9), 1 << (12 + 9 + 9)]
         assert vaddr % page_size == 0, f"vaddr 0x{vaddr:x} not aligned to page size ({human_size_strict(page_size)})"
 
-        pgd_slot = get_pgd_slot(vaddr)
+        pgd_slot = aarch64_get_pgd_slot(vaddr)
         try:
             pud = vspace[pgd_slot].referent
         except KeyError:
@@ -675,7 +687,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             vspace[pgd_slot] = capdl.Cap(pud)
         assert isinstance(pud, PUD)
 
-        pud_slot = get_pud_slot(vaddr)
+        pud_slot = aarch64_get_pud_slot(vaddr)
         if page_size == (1 << 30):
             assert pud.slots.get(pud_slot) is None, f"1GiB page already mapped at virtual address {vaddr}"
             pud[pud_slot] = page_cap
@@ -688,7 +700,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             pud[pud_slot] = capdl.Cap(pagedir)
         assert isinstance(pagedir, capdl.PageDirectory)
 
-        pagedir_slot = get_pagedir_slot(vaddr)
+        pagedir_slot = aarch64_get_pagedir_slot(vaddr)
         if page_size == (1 << 21):
             assert pagedir.slots.get(pagedir_slot) is None, f"2MiB page already mapped at virtual address {vaddr}"
             pagedir[pagedir_slot] = page_cap
@@ -701,13 +713,79 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             pagedir[pagedir_slot] = capdl.Cap(pt)
         assert isinstance(pt, capdl.PageTable)
 
-        pt_slot = get_pt_slot(vaddr)
+        pt_slot = aarch64_get_pt_slot(vaddr)
         assert pt.slots.get(pt_slot) is None, f"4KiB page already mapped at virtual address {vaddr}"
         pt[pt_slot] = page_cap
 
-    register_aarch64_sizes()
-    cdl_spec = capdl.Spec(arch="aarch64")
 
+    def x86_64_map_page(cdl_spec: capdl.Spec, pd_name: str, vspace: PML4, page_cap: capdl.Cap, vaddr: int):
+        assert isinstance(page_cap.referent, capdl.Frame)
+        page_size = page_cap.referent.size
+        assert page_size in [1 << 12, 1 << (12 + 9), 1 << (12 + 9 + 9)]
+        assert vaddr % page_size == 0, f"vaddr 0x{vaddr:x} not aligned to page size ({human_size_strict(page_size)})"
+
+        pml4_slot = x86_64_get_pml4_slot(vaddr)
+        try:
+            pdpt = vspace[pml4_slot].referent
+        except KeyError:
+            pdpt = PDPT(f"pdpt_{pd_name}_0x{mask_bits(vaddr, 12 + 9 + 9 + 9):x}")
+            cdl_spec.add_object(pdpt)
+            vspace[pml4_slot] = capdl.Cap(pdpt)
+        assert isinstance(pdpt, PDPT)
+
+        pdpt_slot = x86_64_get_pdpt_slot(vaddr)
+        if page_size == (1 << 30):
+            assert pdpt.slots.get(pdpt_slot) is None, f"1GiB page already mapped at virtual address {vaddr}"
+            pdpt[pdpt_slot] = page_cap
+            return
+        try:
+            pd = pdpt[pdpt_slot].referent
+        except KeyError:
+            pd = capdl.PageDirectory(f"pd_{pd_name}_0x{mask_bits(vaddr, 12 + 9 + 9):x}")
+            cdl_spec.add_object(pd)
+            pdpt[pdpt_slot] = capdl.Cap(pd)
+        assert isinstance(pd, capdl.PageDirectory)
+
+        pd_slot = x86_64_get_pd_slot(vaddr)
+        if page_size == (1 << 21):
+            assert pd.slots.get(pd_slot) is None, f"2MiB page already mapped at virtual address {vaddr}"
+            pd[pd_slot] = page_cap
+            return
+        try:
+            pt = pd[pd_slot].referent
+        except KeyError:
+            pt = capdl.PageTable(f"pt_{pd_name}_0x{mask_bits(vaddr, 12 + 9):x}")
+            cdl_spec.add_object(pt)
+            pd[pd_slot] = capdl.Cap(pt)
+        assert isinstance(pt, capdl.PageTable)
+
+        pt_slot = aarch64_get_pt_slot(vaddr)
+        assert pt.slots.get(pt_slot) is None, f"4KiB page already mapped at virtual address {vaddr}"
+        pt[pt_slot] = page_cap
+
+
+    def capdl_page_map(cdl_spec: capdl.Spec, kernel_config: KernelConfig, pd_name: str, vspace, page_cap: capdl.Cap, vaddr: int):
+        if kernel_config.arch == KernelArch.AARCH64:
+            aarch64_map_page(cdl_spec, pd_name, vspace, page_cap, vaddr)
+        elif kernel_config.arch == KernelArch.X86_64:
+            x86_64_map_page(cdl_spec, pd_name, vspace, page_cap, vaddr)
+        else:
+            raise Exception(f"Unexpected kernel architecture: {kernel_config.arch}")
+
+    # Determine the architecture before creating the CapDL spec class
+    if kernel_config.arch == KernelArch.AARCH64:
+        register_sizes_aarch64()
+        capdl_arch = "aarch64"
+        top_level_vspace_object = PGD
+    elif kernel_config.arch == KernelArch.X86_64:
+        register_sizes_x86_64()
+        capdl_arch = "x86_64"
+        top_level_vspace_object = PML4
+    else:
+        raise Exception(f"Unexpected kernel architecture: {kernel_config.arch}")
+
+    print(f"capdl arch is: {capdl_arch}")
+    cdl_spec = capdl.Spec(arch=capdl_arch)
     # @ivanv: looks like there is a bug if multiple PDs have the same ELF
     # @ivanv: what happens if the monitor faults?
     # @ivanv: need to audit rights on the caps
@@ -720,14 +798,12 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
 
     # Here we create the caps and kernel objects for the monitor, which acts as the default
     # fault handler for all PDs
-    monitor_elf = capdl.ELF(str(monitor_path), name=monitor_path.name)
+    monitor_elf = capdl.ELF(str(monitor_path), name=monitor_path.name, arch=capdl_arch)
     monitor_elf_spec = monitor_elf.get_spec(infer_asid=False)
-    print(f"monitor_elf_spec:")
-    print(f"{monitor_elf_spec.objs}")
     monitor_tcb = next(x for x in monitor_elf_spec.objs if isinstance(x, capdl.TCB))
     monitor_tcb.sp = monitor_elf.get_symbol_vaddr("_stack")
     monitor_tcb.prio = 254
-    monitor_vspace = next(x for x in monitor_elf_spec.objs if isinstance(x, PGD))
+    monitor_vspace = next(x for x in monitor_elf_spec.objs if isinstance(x, top_level_vspace_object))
     monitor_tcb["vspace"] = capdl.Cap(monitor_vspace)
     cdl_spec.merge(monitor_elf_spec)
 
@@ -750,7 +826,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     monitor_page = capdl.Frame(f"ipcbuf_monitor")
     cdl_spec.add_object(monitor_page)
     monitor_ipc_page_cap = capdl.Cap(monitor_page, read=True, write=True)
-    arm_map_page(cdl_spec, "monitor", monitor_vspace, monitor_ipc_page_cap, monitor_ipc_vaddr)
+    capdl_page_map(cdl_spec, kernel_config, "monitor", monitor_vspace, monitor_ipc_page_cap, monitor_ipc_vaddr)
     monitor_tcb["ipc_buffer_slot"] = monitor_ipc_page_cap
 
     # monitor_scheduling_context = capdl.SC("monitor_scheduling_context", period=100, budget=100, size_bits=PD_SCHEDCONTEXT_SIZE)
@@ -766,12 +842,12 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     # capdl for pds
     for i, pd in enumerate(system.protection_domains):
         path = _get_full_path(pd.program_image, search_paths).resolve()
-        elf = capdl.ELF(str(path), name=path.name)
+        elf = capdl.ELF(str(path), name=path.name, arch=capdl_arch)
         elf_spec = elf.get_spec(infer_asid=False)
         tcb = next(x for x in elf_spec.objs if isinstance(x, capdl.TCB))
         tcb.sp = elf.get_symbol_vaddr("_stack")
         tcb.prio = pd.priority
-        vspace = next(x for x in elf_spec.objs if isinstance(x, PGD))
+        vspace = next(x for x in elf_spec.objs if isinstance(x, top_level_vspace_object))
         tcb["vspace"] = capdl.Cap(vspace)
         cdl_spec.merge(elf_spec)
 
@@ -800,7 +876,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         page = capdl.Frame(f"ipcbuf_{pd.name}")
         cdl_spec.add_object(page)
         cap = capdl.Cap(page, read=True, write=True)
-        arm_map_page(cdl_spec, pd.name, vspace, cap, vaddr)
+        capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr)
         tcb["ipc_buffer_slot"] = cap
 
         # monitor_cspace[5 + i] = capdl.Cap(tcb, read=True)
@@ -835,7 +911,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
                 page = capdl.Frame(f"mr_{map.mr}_{i}", paddr=paddr, size=mr.page_size)
                 cdl_spec.add_object(page)
                 cap = capdl.Cap(page, read="r" in map.perms, write="w" in map.perms, grant="x" in map.perms, cached=map.cached)
-                arm_map_page(cdl_spec, pd.name, vspace, cap, vaddr=map.vaddr + i * mr.page_size)
+                capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr=map.vaddr + i * mr.page_size)
 
         for sysirq in pd.irqs:
             irq = capdl.IRQ(f"irq_{sysirq.irq}", number=sysirq.irq)
@@ -2155,15 +2231,16 @@ def main() -> int:
     if not elf_path.exists():
         print(f"Error: board ELF directory '{elf_path}' does not exist")
         return 1
-    if not loader_elf_path.exists():
-        print(f"Error: loader ELF '{loader_elf_path}' does not exist")
-        return 1
+    # @ivanv: come back to
+    # if not loader_elf_path.exists():
+    #     print(f"Error: loader ELF '{loader_elf_path}' does not exist")
+    #     return 1
     if not kernel_elf_path.exists():
         print(f"Error: loader ELF '{kernel_elf_path}' does not exist")
         return 1
-    if not normal_monitor_elf_path.exists():
-        print(f"Error: monitor ELF '{monitor_elf_path}' does not exist")
-        return 1
+    # if not normal_monitor_elf_path.exists():
+    #     print(f"Error: monitor ELF '{normal_monitor_elf_path}' does not exist")
+    #     return 1
     if not capdl_monitor_elf_path.exists():
         print(f"Error: capDL monitor ELF '{capdl_monitor_elf_path}' does not exist")
         return 1
@@ -2258,50 +2335,52 @@ def main() -> int:
         assert r == 0
         r = system(f"{parse_capdl_tool} --object-sizes={object_sizes_path} --json=spec.json {CAPDL_SPEC_PATH}")
         assert r == 0
-        new_capdl_initialiser_elf_path = Path("capdl-test.elf")
+        new_capdl_initialiser_elf_path = Path("capdl-initialiser-with-spec.elf")
         capdl_add_spec_cmd = f"{capdl_add_spec} -e {capdl_initialiser_elf_path} -f spec.json -d {args.search_path[1]} -o {new_capdl_initialiser_elf_path}"
         print(f"==={capdl_add_spec_cmd}")
         r = system(capdl_add_spec_cmd)
         assert r == 0
+        r = system(f"cp {new_capdl_initialiser_elf_path} {args.search_path[1]}")
+        assert r == 0
 
     initialiser_elf = ElfFile.from_path(new_capdl_initialiser_elf_path) if args.capdl else monitor_elf
 
-    invocation_table_size = kernel_config.minimum_page_size
-    system_cnode_size = 2
-
-    while True:
-        built_system = build_system(
-            args.capdl,
-            kernel_config,
-            kernel_elf,
-            initialiser_elf,
-            system_description,
-            invocation_table_size,
-            system_cnode_size,
-            search_paths,
-        )
-        print(f"BUILT: {system_cnode_size=} {built_system.number_of_system_caps=} {invocation_table_size=} {built_system.invocation_data_size=}")
-        if (built_system.number_of_system_caps <= system_cnode_size and
-            built_system.invocation_data_size <= invocation_table_size):
-            break
-
-        # Recalculate the sizes for the next iteration
-        new_invocation_table_size = round_up(built_system.invocation_data_size, kernel_config.minimum_page_size)
-        new_system_cnode_size = 2 ** int(ceil(log2(built_system.number_of_system_caps)))
-
-        invocation_table_size = max(invocation_table_size, new_invocation_table_size)
-        system_cnode_size = max(system_cnode_size, new_system_cnode_size)
-
-    # At this point we just need to patch the files (in memory) and write out the final image.
-
-    # A: The monitor
-
-    # A.1: As part of emulated boot we determined exactly how the kernel would
-    # create untyped objects. Throught testing we know that this matches, but
-    # we could have a bug, or the kernel could change. It that happens we are
-    # in a bad spot! Things will break. So we write out this information so that
-    # the monitor can double check this at run time.
     if not args.capdl:
+        invocation_table_size = kernel_config.minimum_page_size
+        system_cnode_size = 2
+
+        while True:
+            built_system = build_system(
+                args.capdl,
+                kernel_config,
+                kernel_elf,
+                initialiser_elf,
+                system_description,
+                invocation_table_size,
+                system_cnode_size,
+                search_paths,
+            )
+            print(f"BUILT: {system_cnode_size=} {built_system.number_of_system_caps=} {invocation_table_size=} {built_system.invocation_data_size=}")
+            if (built_system.number_of_system_caps <= system_cnode_size and
+                built_system.invocation_data_size <= invocation_table_size):
+                break
+
+            # Recalculate the sizes for the next iteration
+            new_invocation_table_size = round_up(built_system.invocation_data_size, kernel_config.minimum_page_size)
+            new_system_cnode_size = 2 ** int(ceil(log2(built_system.number_of_system_caps)))
+
+            invocation_table_size = max(invocation_table_size, new_invocation_table_size)
+            system_cnode_size = max(system_cnode_size, new_system_cnode_size)
+
+        # At this point we just need to patch the files (in memory) and write out the final image.
+
+        # A: The monitor
+
+        # A.1: As part of emulated boot we determined exactly how the kernel would
+        # create untyped objects. Throught testing we know that this matches, but
+        # we could have a bug, or the kernel could change. It that happens we are
+        # in a bad spot! Things will break. So we write out this information so that
+        # the monitor can double check this at run time.
         _, untyped_info_size = monitor_elf.find_symbol(MONITOR_CONFIG.untyped_info_symbol_name)
         max_untyped_objects = MONITOR_CONFIG.max_untyped_objects(untyped_info_size)
         if len(built_system.kernel_boot_info.untyped_objects) > max_untyped_objects:
@@ -2338,15 +2417,14 @@ def main() -> int:
         monitor_elf.write_symbol(MONITOR_CONFIG.system_invocation_count_symbol_name, pack("<Q", len(built_system.system_invocations)))
         monitor_elf.write_symbol(MONITOR_CONFIG.bootstrap_invocation_data_symbol_name, bootstrap_invocation_data)
 
-    system_invocation_data_array = bytearray()
-    for system_invocation in built_system.system_invocations:
-        system_invocation_data_array += system_invocation._get_raw_invocation(kernel_config)
-    system_invocation_data = bytes(system_invocation_data_array)
+        system_invocation_data_array = bytearray()
+        for system_invocation in built_system.system_invocations:
+            system_invocation_data_array += system_invocation._get_raw_invocation(kernel_config)
+        system_invocation_data = bytes(system_invocation_data_array)
 
-    regions: List[Tuple[int, Union[bytes, bytearray]]] = [(built_system.reserved_region.base, system_invocation_data)]
-    regions += [(r.addr, bytes([0] * r.offset) + r.data) for r in built_system.regions]
+        regions: List[Tuple[int, Union[bytes, bytearray]]] = [(built_system.reserved_region.base, system_invocation_data)]
+        regions += [(r.addr, bytes([0] * r.offset) + r.data) for r in built_system.regions]
 
-    if not args.capdl:
         tcb_caps = built_system.tcb_caps
         sched_caps = built_system.sched_caps
         ntfn_caps = built_system.ntfn_caps
@@ -2362,15 +2440,14 @@ def main() -> int:
         monitor_elf.write_symbol("pd_names", names_array)
 
 
-    # B: The loader
+        # B: The loader
 
-    # B.1: The loader is primarily about loading 'regions' of memory.
-    # so here we determine which regions it should be loading into
-    # physical memory
-    cap_lookup = built_system.cap_lookup
+        # B.1: The loader is primarily about loading 'regions' of memory.
+        # so here we determine which regions it should be loading into
+        # physical memory
+        cap_lookup = built_system.cap_lookup
 
-    # Reporting
-    if not args.capdl:
+        # Reporting
         with args.report.open("w") as f:
             f.write("# Kernel Boot Info\n\n")
             f.write(f"    # of fixed caps     : {built_system.kernel_boot_info.fixed_cap_count:8,d}\n")
@@ -2410,17 +2487,18 @@ def main() -> int:
                 f.write(f"    0x{idx:04x} {invocation_to_str(kernel_config, invocation, cap_lookup)}\n")
 
     # FIXME: Verify that the regions do not overlap!
-    loader = Loader(
-        args.capdl,
-        kernel_config,
-        loader_elf_path,
-        kernel_elf,
-        initialiser_elf,
-        built_system.initial_task_phys_region.base,
-        built_system.reserved_region,
-        regions,
-    )
-    loader.write_image(args.output)
+    if kernel_config.arch != KernelArch.X86_64:
+        loader = Loader(
+            args.capdl,
+            kernel_config,
+            loader_elf_path,
+            kernel_elf,
+            initialiser_elf,
+            built_system.initial_task_phys_region.base,
+            built_system.reserved_region,
+            regions,
+        )
+        loader.write_image(args.output)
 
     return 0
 

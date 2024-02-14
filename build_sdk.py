@@ -31,7 +31,7 @@ MICROKIT_EPOCH = 1616367257
 KERNEL_CONFIG_TYPE = Union[bool, str]
 KERNEL_OPTIONS = Dict[str, KERNEL_CONFIG_TYPE]
 
-X86_64_TOOLCHAIN = ""
+X86_64_TOOLCHAIN = "x86_64-linux-gnu-"
 AARCH64_TOOLCHAIN = "aarch64-none-elf-"
 # We can use the same toolchain for both 32-bit and 64-bit RISC-V builds.
 RISCV_TOOLCHAIN = "riscv64-unknown-elf-"
@@ -454,18 +454,44 @@ SUPPORTED_BOARDS = (
             "hello": Path("example/polarfire/hello")
         }
     ),
-    # BoardInfo(
-    #     name="x86_64",
-    #     arch=BoardArch.X86_64,
-    #     gcc_flags = "",
-    #     loader_link_address=0x80200000,
-    #     kernel_options = {
-    #         "KernelIsMCS": True,
-    #         "KernelPlatform": "pc99",
-    #         "KernelSel4Arch": "x86_64",
-    #     },
-    #     examples = {}
-    # ),
+    BoardInfo(
+        name="x86_64_virt",
+        arch=BoardArch.X86_64,
+        gcc_flags = "GCC_MARCH=nehalem",
+        loader_link_address=0x10000000, # 256MB
+        kernel_options = {
+            "KernelIsMCS": True,
+            "KernelPlatform": "pc99",
+            "KernelSel4Arch": "x86_64",
+            # "KernelVTX": True,
+            "KernelX86MicroArch": "nehalem",
+            "KernelSupportPCID": False,
+            "KernelFSGSBaseInst": False,
+            "KernelFPU": "FXSAVE",
+        },
+        examples = {
+            "hello": Path("example/x86_64_virt/hello")
+        }
+    ),
+    BoardInfo(
+        name="vb_105",
+        arch=BoardArch.X86_64,
+        gcc_flags = "GCC_MARCH=skylake",
+        loader_link_address=0x10000000, # 256MB
+        kernel_options = {
+            "KernelIsMCS": True,
+            "KernelPlatform": "pc99",
+            "KernelSel4Arch": "x86_64",
+            # "KernelVTX": True,
+            "KernelX86MicroArch": "skylake",
+            "KernelSupportPCID": False,
+            "KernelFSGSBaseInst": False,
+            "KernelFPU": "FXSAVE",
+        },
+        examples = {
+            "hello": Path("example/x86_64_virt/hello")
+        }
+    ),
 )
 
 SUPPORTED_CONFIGS = (
@@ -597,10 +623,7 @@ def build_sel4(
     elif board.arch == BoardArch.AARCH64:
         toolchain_config = f"-DCROSS_COMPILER_PREFIX={AARCH64_TOOLCHAIN}"
     elif board.arch == BoardArch.X86_64:
-        if host_arch != "x86_64":
-            assert False, "@ivanv: Figure out cross-compiling to x86-64"
-        else:
-            toolchain_config = ""
+        toolchain_config = f"-DCROSS_COMPILER_PREFIX={X86_64_TOOLCHAIN}"
     else:
         raise Exception(f"Unexpected board arch: {board.arch}")
 
@@ -717,8 +740,20 @@ def build_capdl_initialiser(
     build_dir = build_dir / board.name / config.name / component_name
     build_dir.mkdir(exist_ok=True, parents=True)
     defines_str = " ".join(f"{k}={v}" for k, v in defines)
+
+    if board.arch == BoardArch.AARCH64:
+        arch_args = f"ARCH=aarch64 TOOLCHAIN={AARCH64_TOOLCHAIN}"
+    elif board.arch == BoardArch.RISCV64:
+        arch_args = f"ARCH=riscv64 TOOLCHAIN={RISCV_TOOLCHAIN}"
+    elif board.arch == BoardArch.RISCV32:
+        arch_args = f"ARCH=riscv32 TOOLCHAIN={RISCV_TOOLCHAIN}"
+    elif board.arch == BoardArch.X86_64:
+        arch_args = f"ARCH=x86_64 TOOLCHAIN={X86_64_TOOLCHAIN}"
+    else:
+        raise Exception(f"Unexpected arch given: {board.arch}", board.arch)
+
     r = system(
-        f"BOARD={board.name} BUILD_DIR={build_dir.absolute()} SEL4_SDK={sel4_dir.absolute()} {defines_str} make  -C {component_name} all"
+        f"BOARD={board.name} BUILD_DIR={build_dir.absolute()} {arch_args} SEL4_SDK={sel4_dir.absolute()} {defines_str} make  -C {component_name} all"
     )
     if r != 0:
         raise Exception(
@@ -770,6 +805,8 @@ def build_lib_component(
         arch_args = f"ARCH=riscv64 TOOLCHAIN={RISCV_TOOLCHAIN}"
     elif board.arch == BoardArch.RISCV32:
         arch_args = f"ARCH=riscv32 TOOLCHAIN={RISCV_TOOLCHAIN}"
+    elif board.arch == BoardArch.X86_64:
+        arch_args = f"ARCH=x86_64 TOOLCHAIN={X86_64_TOOLCHAIN}"
     else:
         raise Exception(f"Unexpected arch given: {board.arch}", board.arch)
 
@@ -924,8 +961,10 @@ def main() -> None:
                 else:
                     raise Exception("Expected seL4 generated config to define number of physical address bits")
                 loader_defines.append(("PA_SIZE_BITS", pa_size_bits))
-            build_elf_component("loader", root_dir, build_dir, board, config, loader_defines)
-            build_elf_component("monitor", root_dir, build_dir, board, config, [])
+            # x86_64 support does not need our own bootloader, or the normal monitor
+            if board.arch != BoardArch.X86_64:
+                build_elf_component("loader", root_dir, build_dir, board, config, loader_defines)
+                build_elf_component("monitor", root_dir, build_dir, board, config, [])
             build_elf_component("capdl-monitor", root_dir, build_dir, board, config, [])
             initialiser_defines = [("KERNEL_INSTALL_DIR", build_dir.absolute() / board.name / config.name / "sel4/install")]
             build_capdl_initialiser("capdl-initialiser", root_dir, build_dir, board, config, initialiser_defines)

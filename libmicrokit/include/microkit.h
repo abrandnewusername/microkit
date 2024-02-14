@@ -123,7 +123,13 @@ microkit_pd_restart(microkit_id pd, uintptr_t entry_point)
     seL4_Error err;
     seL4_UserContext ctxt;
     memzero(&ctxt, sizeof(seL4_UserContext));
+#if defined(CONFIG_ARCH_X86_64)
+    ctxt.rip = entry_point;
+#elif defined(CONFIG_ARCH_AARCH64) || defined(CONFIG_ARCH_RISCV)
     ctxt.pc = entry_point;
+#else
+    #error "Unsupported architecture for 'microkit_pd_restart'"
+#endif
     err = seL4_TCB_WriteRegisters(
         BASE_TCB_CAP + pd,
         true,

@@ -38,21 +38,21 @@ else ifeq ($(ARCH),riscv32)
 	ASM_CPP_FLAGS_ARCH := -march=$(MARCH) -mabi=$(MABI)
 	ASM_FLAGS_ARCH := -g3 -march=$(MARCH) -mabi=$(MABI)
 	ARCH_DIR := riscv
+else ifeq ($(ARCH),x86_64)
+	C_FLAGS_ARCH := -march=$(GCC_MARCH) -DARCH_x86_64
+	ASM_CPP_FLAGS_ARCH := -march=generic64
+	ASM_FLAGS_ARCH := -march=generic64
+	ARCH_DIR := x86_64
 else
-	$(error ARCH must be aarch64 or riscv64 or riscv32)
+	$(error ARCH must be aarch64 or riscv64 or riscv32 or x86_64)
 endif
 
 C_FLAGS := -std=gnu11 -g3 -O3 -nostdlib -ffreestanding -Wall -Wno-maybe-uninitialized -Wno-unused-function -Werror -Iinclude -I$(SEL4_SDK)/include $(C_FLAGS_ARCH)
 ASM_CPP_FLAGS := -x assembler-with-cpp -c -g3 $(ASM_CPP_FLAGS_ARCH)
 ASM_FLAGS := -g3 $(ASM_FLAGS_ARCH)
 
-ifeq ($(ARCH),x86_64)
-	GCC := gcc
-	AS := as
-else
-	GCC := $(TOOLCHAIN)gcc
-	AS := $(TOOLCHAIN)as
-endif
+GCC := $(TOOLCHAIN)gcc
+AS := $(TOOLCHAIN)as
 
 LIBS := libmicrokit.a
 OBJS := main.o crt0.o dbg.o

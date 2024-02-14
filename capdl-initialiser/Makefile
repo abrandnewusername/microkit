@@ -10,14 +10,24 @@ ifeq ($(strip $(KERNEL_INSTALL_DIR)),)
 $(error KERNEL_INSTALL_DIR must be specified)
 endif
 
-GCC_TOOLCHAIN := aarch64-none-elf-
+ifeq ($(strip $(TOOLCHAIN)),)
+$(error TOOLCHAIN must be specified)
+endif
 
 ### Common Rust definitions
 
+ifeq ($(ARCH),aarch64)
+	rust_sel4_target := aarch64-sel4-minimal
+	rust_bare_metal_target := aarch64-unknown-none
+else ifeq ($(ARCH),x86_64)
+	rust_sel4_target := x86_64-sel4-minimal
+	rust_bare_metal_target := x86_64-unknown-none
+else
+	$(error ARCH must be aarch64 or x86_64)
+endif
+
 rust_source_path := rust-seL4
 rust_target_path := $(rust_source_path)/support/targets
-rust_sel4_target := aarch64-sel4-minimal
-rust_bare_metal_target := aarch64-unknown-none
 target_dir := $(BUILD_DIR)/capdl/target
 cargo_root_dir := $(BUILD_DIR)/capdl/cargo-root
 
@@ -78,7 +88,7 @@ $(capdl_loader_intermediate):
 object_sizes := $(BUILD_DIR)/object-sizes.yaml
 
 $(object_sizes):
-	$(GCC_TOOLCHAIN)gcc -E -P - \
+	$(TOOLCHAIN)gcc -E -P - \
 		-I $(KERNEL_INSTALL_DIR)/libsel4/include \
 		< $(capdl_source_dir)/object_sizes/object_sizes.yaml \
 		> $@

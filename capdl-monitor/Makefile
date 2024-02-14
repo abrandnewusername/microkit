@@ -7,29 +7,72 @@ ifeq ($(strip $(BUILD_DIR)),)
 $(error BUILD_DIR must be specified)
 endif
 
-ifeq ($(strip $(GCC_CPU)),)
-$(error GCC_CPU must be specified)
+# ifeq ($(strip $(GCC_CPU)),)
+# $(error GCC_CPU must be specified)
+# endif
+
+ifeq ($(strip $(ARCH)),)
+$(error ARCH must be specified)
 endif
 
-TOOLCHAIN := aarch64-none-elf-
-CFLAGS := -std=gnu11 -g3 -O3 -nostdlib -ffreestanding -mcpu=$(GCC_CPU) -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
+ifeq ($(strip $(TOOLCHAIN)),)
+$(error TOOLCHAIN must be specified)
+endif
+
+ifeq ($(ARCH),x86_64)
+ifeq ($(strip $(GCC_MARCH)),)
+$(error GCC_MARCH must be specified for ARCH=$(ARCH))
+endif
+endif
+
+ifeq ($(ARCH),aarch64)
+	C_FLAGS := -std=gnu11 -g3 -O3 -nostdlib -ffreestanding -mcpu=$(GCC_CPU) -DARCH_aarch64 -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
+	ASM_CPP_FLAGS := -x assembler-with-cpp -c -g3 -mcpu=$(GCC_CPU)
+	ASM_FLAGS := -g3 -mcpu=$(GCC_CPU)
+else ifeq ($(ARCH),riscv64)
+	C_FLAGS := -mcmodel=medany -std=gnu11 -g3 -O3 -nostdlib -ffreestanding -march=rv64imac -mabi=lp64 -DARCH_riscv64 -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
+	ASM_CPP_FLAGS := -x assembler-with-cpp -c -g3 -march=rv64imac -mabi=lp64
+	ASM_FLAGS := -g3 -march=rv64imac -mabi=lp64
+else ifeq ($(ARCH),riscv32)
+	C_FLAGS := -mcmodel=medany -std=gnu11 -g3 -O3 -nostdlib -ffreestanding -march=rv32imac -mabi=ilp32 -DARCH_riscv32 -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
+	ASM_CPP_FLAGS := -x assembler-with-cpp -c -g3 -march=rv32imac -mabi=ilp32
+	ASM_FLAGS := -g3 -march=rv32imac -mabi=ilp32
+else ifeq ($(ARCH),x86_64)
+	C_FLAGS := -std=gnu11 -g3 -O3 -nostdlib -ffreestanding -march=$(GCC_MARCH) -mabi=sysv -DARCH_x86_64 -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
+	ASM_CPP_FLAGS := -x assembler-with-cpp -c -g3
+	ASM_FLAGS := -g3 -march=generic64
+else
+	$(error ARCH must be aarch64 or riscv64 or riscv32 or x86_64)
+endif
+
+GCC := $(TOOLCHAIN)gcc
+AS := $(TOOLCHAIN)as
 
 PROGS := capdl-monitor.elf
 OBJECTS := main.o crt0.o util.o
 LINKSCRIPT := capdl-monitor.ld
 
+$(BUILD_DIR)/%.o : src/$(ARCH)/%.S
+	$(GCC) $(ASM_CPP_FLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o : src/$(ARCH)/%.s
+	$(AS) $(ASM_FLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o : src/$(ARCH)/%.c
+	$(GCC) -c $(C_FLAGS)  $< -o $@
+
 $(BUILD_DIR)/%.o : src/%.S
-	$(TOOLCHAIN)gcc -x assembler-with-cpp -c -g3  -mcpu=$(GCC_CPU)  $< -o $@
+	$(GCC) $(ASM_CPP_FLAGS) $< -o $@
 
 $(BUILD_DIR)/%.o : src/%.s
-	$(TOOLCHAIN)as -g3 -mcpu=$(GCC_CPU) $< -o $@
+	$(AS) $(ASM_FLAGS) $< -o $@
 
 $(BUILD_DIR)/%.o : src/%.c
-	$(TOOLCHAIN)gcc -c $(CFLAGS)  $< -o $@
+	$(GCC) -c $(C_FLAGS)  $< -o $@
 
 OBJPROG = $(addprefix $(BUILD_DIR)/, $(PROGS))
 
-all: $(OBJPROG) $(addprefix $(BUILD_DIR)/, $(OBJECTS))
+all: $(OBJPROG)
 
 $(OBJPROG): $(addprefix $(BUILD_DIR)/, $(OBJECTS)) $(LINKSCRIPT)
 	$(TOOLCHAIN)ld -T$(LINKSCRIPT) $(addprefix $(BUILD_DIR)/, $(OBJECTS)) -o $@
