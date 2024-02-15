@@ -21,6 +21,8 @@ def make_exe():
     exe = dist.to_python_executable(name="microkit", packaging_policy=policy, config=python_config)
     resources = exe.read_package_root(path="tool", packages=["microkit"])
     exe.add_python_resources(resources)
+    exe.add_python_resources(exe.read_package_root(path="tool", packages=["capdl"]))
+    exe.add_python_resources(exe.pip_install(["sortedcontainers", "six", "future", "pyelftools"]))
 
     return exe
 

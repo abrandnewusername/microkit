@@ -50,10 +50,6 @@ from json import load as json_load
 from typing import Dict, List, Optional, Tuple, Union
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-# @ivanv: total hack since I don't have time to deal with Python's annoying
-# module system
-cwd = getcwd()
-sys.path.append(cwd + "/../../../capdl-initialiser/capdl/python-capdl-tool")
 import capdl
 from capdl.Object import *
 from microkit.cdlutil import register_sizes_aarch64, register_sizes_x86_64, cdlsafe, UpperDir, LowerDir, PTable, PFrame, alignment_of_sort
@@ -2319,7 +2315,10 @@ def main() -> int:
     capdl_initialiser_elf = ElfFile.from_path(capdl_initialiser_elf_path)
 
     if args.capdl:
-        CAPDL_SPEC_PATH = "spec.cdl"
+        assert len(args.search_path) == 2, f"Ivan did not code well (search path is {args.search_path})"
+
+        CAPDL_SPEC_PATH = Path(f"{args.search_path[1]}/spec.cdl")
+        CAPDL_SPEC_JSON_PATH = Path(f"{args.search_path[1]}/spec.json")
         cdl_spec = generate_capdl(system_description, search_paths, kernel_config, monitor_elf_path)
         with open(CAPDL_SPEC_PATH, "w") as f:
             f.write('%s' % cdl_spec)
@@ -2331,14 +2330,14 @@ def main() -> int:
         # @ivanv: check that these commands are successful
         r = system(f"cp {monitor_elf_path} {args.search_path[1]}")
         assert r == 0
-        r = system(f"{parse_capdl_tool} --object-sizes={object_sizes_path} --json=spec.json {CAPDL_SPEC_PATH}")
+        r = system(f"{parse_capdl_tool} --object-sizes={object_sizes_path} --json={CAPDL_SPEC_JSON_PATH} {CAPDL_SPEC_PATH}")
         assert r == 0
-        new_capdl_initialiser_elf_path = Path("capdl-initialiser-with-spec.elf")
-        capdl_add_spec_cmd = f"{capdl_add_spec} -e {capdl_initialiser_elf_path} -f spec.json -d {args.search_path[1]} -o {new_capdl_initialiser_elf_path}"
+        new_capdl_initialiser_elf_path = Path(f"{args.search_path[1]}/capdl-initialiser-with-spec.elf")
+        capdl_add_spec_cmd = f"{capdl_add_spec} -e {capdl_initialiser_elf_path} -f {CAPDL_SPEC_JSON_PATH} -d {args.search_path[1]} -o {new_capdl_initialiser_elf_path}"
         r = system(capdl_add_spec_cmd)
         assert r == 0
-        r = system(f"cp {new_capdl_initialiser_elf_path} {args.search_path[1]}")
-        assert r == 0
+        # r = system(f"cp {new_capdl_initialiser_elf_path} {args.search_path[1]}")
+        # assert r == 0
 
     initialiser_elf = ElfFile.from_path(new_capdl_initialiser_elf_path) if args.capdl else monitor_elf
 
