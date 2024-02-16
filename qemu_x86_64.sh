@@ -3,7 +3,7 @@
 set -e
 
 ./pyenv/bin/python dev_build.py --board x86_64_virt --example hello --rebuild
-objcopy -O elf32-i386 release/microkit-sdk-1.2.6/board/x86_64_virt/debug/elf/sel4.elf tmp_build/kernel.elf
+x86_64-linux-gnu-objcopy -O elf32-i386 release/microkit-sdk-1.2.6/board/x86_64_virt/debug/elf/sel4.elf tmp_build/kernel.elf
 
 qemu-system-x86_64                                                                         \
         -cpu Nehalem,-vme,+pdpe1gb,-xsave,-xsaveopt,-xsavec,+fsgsbase,-invpcid,+syscall,+lm,enforce \
