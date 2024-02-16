@@ -209,7 +209,7 @@ class CSpaceAllocator(object):
         self.cnode = cnode
         self.slot = 1  # Skip the null slot
 
-    def alloc(self, obj, update_guard_size=True, **kwargs):
+    def alloc(self, obj, **kwargs):
         '''
         Allocate a cap in the next available slot, referencing the given
         object. The caller is expected to pass either (a) no extra parameters
@@ -242,7 +242,7 @@ class CSpaceAllocator(object):
                 kwargs['grant'] = kwargs['rights'] & ObjectRights.seL4_CanGrant > 0
                 kwargs['grantreply'] = kwargs['rights'] & ObjectRights.seL4_CanGrantReply > 0
             cap = Cap(obj, **kwargs)
-        if isinstance(obj, CNode) and update_guard_size:
+        if isinstance(obj, CNode):
             obj.update_guard_size_caps.append(cap)
 
         self.cnode[slot] = cap
@@ -275,7 +275,6 @@ class AddressSpaceAllocator(object):
         self.vspace_root = vspace_root
         self._symbols = {}
         self._regions = {}
-        self._hack_pages = {}
 
     def add_symbol_with_caps(self, symbol, sizes, caps):
         '''
@@ -333,16 +332,6 @@ class AddressSpaceAllocator(object):
         regions = self._regions
         self._regions = None
         return regions
-
-    def add_hack_page(self, vaddr, size, cap, fill=[]):
-        if vaddr in self._hack_pages:
-            raise Exception("vaddr 0x{:x} (size 0x{:x}) is already mapped".format(vaddr, size))
-        self._hack_pages[vaddr] = (size, cap, fill)
-
-    def get_hack_pages_and_clear(self):
-        hack_pages = self._hack_pages
-        self._hack_pages = None
-        return hack_pages
 
 
 class AllocatorException(Exception):

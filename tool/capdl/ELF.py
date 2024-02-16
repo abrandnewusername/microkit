@@ -149,6 +149,7 @@ class ELF(object):
         existing_pages = []
         if addr_space:
             # Update symbols with their vaddrs in the AddressSpaceAllocator if we were given one
+            existing_pages = []
             for (symbol, (sizes, caps)) in iteritems(addr_space.get_symbols_and_clear()):
                 assert self.get_symbol_size(symbol) >= sum(sizes), \
                     "Symbol (%s:%d) must have same or greater size than supplied cap range (%d)" % (
@@ -159,10 +160,6 @@ class ELF(object):
             self.check_alignment(existing_pages)
             for (vaddr, sizes, caps) in existing_pages:
                 addr_space.add_region_with_caps(vaddr, sizes, caps)
-
-            for (vaddr, (size, cap, fill)) in addr_space.get_hack_pages_and_clear().items():
-                pages.add_page(vaddr, read=cap.read, write=cap.write, size=size, elffill=fill)
-                addr_space.add_region_with_caps(vaddr, [size], [cap])
 
         for seg in self._elf.iter_segments():
             if not seg['p_type'] == 'PT_LOAD':
