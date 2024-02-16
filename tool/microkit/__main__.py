@@ -2330,6 +2330,8 @@ def main() -> int:
         # @ivanv: check that these commands are successful
         r = system(f"cp {monitor_elf_path} {args.search_path[1]}")
         assert r == 0
+        r = system(f"cp {kernel_elf_path} {args.search_path[1]}")
+        assert r == 0
         r = system(f"{parse_capdl_tool} --object-sizes={object_sizes_path} --json={CAPDL_SPEC_JSON_PATH} {CAPDL_SPEC_PATH}")
         assert r == 0
         new_capdl_initialiser_elf_path = Path(f"{args.search_path[1]}/capdl-initialiser-with-spec.elf")
