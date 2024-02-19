@@ -495,11 +495,11 @@ SUPPORTED_BOARDS = (
 )
 
 SUPPORTED_CONFIGS = (
-    # ConfigInfo(
-    #     name="release",
-    #     debug=False,
-    #     kernel_options = {},
-    # ),
+    ConfigInfo(
+        name="release",
+        debug=False,
+        kernel_options = {},
+    ),
     ConfigInfo(
         name="debug",
         debug=True,
