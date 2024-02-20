@@ -785,6 +785,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     # @ivanv: what happens if the monitor faults?
     # @ivanv: need to audit rights on the caps
     # @ivanv: problem, a PD could fault before the monitor starts...
+    # @ivanv: missing ASID pool!?
 
     # Need to create an endpoint object
     # The cap address of the endpoint object needs to be written to the fault_ep symbol
