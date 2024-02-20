@@ -7,6 +7,7 @@ from pathlib import Path
 import unittest
 
 from microkit.sysxml import xml2system, UserError, PlatformDescription
+from microkit.sel4 import KernelArch
 
 
 plat_desc = PlatformDescription(
@@ -16,6 +17,8 @@ plat_desc = PlatformDescription(
     num_cpus = 4,
     kernel_is_hypervisor = True,
     aarch64_smc_calls_allowed = False,
+    # @ivanv: should test on all architectures!
+    arch = KernelArch.AARCH64,
 )
 
 def _file(filename: str) -> Path:

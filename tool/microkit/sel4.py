@@ -301,9 +301,14 @@ def _get_arch_n_paging(kernel_config: KernelConfig, region: MemoryRegion) -> int
         raise Exception(f"Unknown kernel architecture {kernel_config.arch}")
 
 
-class Sel4ArmIrqTrigger(IntEnum):
+class Sel4IrqTrigger(IntEnum):
     Level = 0
     Edge = 1
+
+
+class Sel4x86IoapicPolarity(IntEnum):
+    Low = 0
+    High = 1
 
 
 class Sel4Aarch64Regs:

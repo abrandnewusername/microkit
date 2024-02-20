@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from typing import Dict, Iterable, Optional, Set, Tuple
 
 from microkit.util import str_to_bool, UserError
-from microkit.sel4 import Sel4ArmIrqTrigger
+from microkit.sel4 import Sel4IrqTrigger, Sel4x86IoapicPolarity, KernelArch
 
 # @ivanv: when we parse mappings, should we warn that settings cached doesn't do anything on RISC-V systems?
 
@@ -37,13 +37,14 @@ def _check_attrs(el: ET.Element, valid_keys: Iterable[str]) -> None:
         if key not in valid_keys:
             raise ValueError(f"invalid attribute '{key}'")
 
-
+# @ivanv: TODO, probably just pass the whole kernel config
 @dataclass(frozen=True, eq=True)
 class PlatformDescription:
     page_sizes: Tuple[int, ...]
     num_cpus: int
     kernel_is_hypervisor: bool
     aarch64_smc_calls_allowed: bool
+    arch: KernelArch
 
 
 class LineNumberingParser(ET.XMLParser):
@@ -71,9 +72,20 @@ class SysMap:
 
 @dataclass(frozen=True, eq=True)
 class SysIrq:
-    irq: int
     id_: int
-    trigger: str
+    irq: int
+    trigger: Optional[str] = None
+    type_: Optional[str] = None
+    # x86 IOAPIC specific fields
+    ioapic: Optional[int] = None
+    pin: Optional[int] = None
+    level: Optional[int] = None
+    polarity: Optional[Sel4x86IoapicPolarity] = None
+    # x86 MSI specific fields
+    pci_bus: Optional[int] = None
+    pci_dev: Optional[int] = None
+    pci_func: Optional[int] = None
+    handle: Optional[int] = None
 
 
 @dataclass(frozen=True, eq=True)
@@ -352,17 +364,54 @@ def xml2pd(pd_xml: ET.Element, plat_desc: PlatformDescription, is_child: bool=Fa
                 if setvar_vaddr:
                     setvars.append(SysSetVar(setvar_vaddr, vaddr=vaddr))
             elif child.tag == "irq":
-                _check_attrs(child, ("irq", "id", "trigger"))
+                _check_attrs(child, ("irq", "id", "trigger", "type", "ioapic", "pin", "level", "polarity", "pci_bus", "pci_dev", "pci_func", "handle"))
                 irq = int(checked_lookup(child, "irq"), base=0)
                 irq_id = int(checked_lookup(child, "id"), base=0)
-                trigger_str = child.attrib.get("trigger", "level")
-                if trigger_str == "level":
-                    trigger = Sel4ArmIrqTrigger.Level
-                elif trigger_str == "edge":
-                    trigger = Sel4ArmIrqTrigger.Edge
+                if plat_desc.arch == KernelArch.X86_64:
+                    irq_type = child.attrib.get("type", None)
+                    if irq_type != None and irq_type != "msi" and irq_type != "ioapic":
+                        raise ValueError("On x86_64 platforms, type must be specified as 'msi' or 'ioapic'")
+                    elif irq_type == "msi":
+                        # Check that only pci_bus, pci_dev, pci_func, handle are set.
+                        _check_attrs(child, ("irq", "id", "type", "pci_bus", "pci_dev", "pci_func", "handle"))
+
+                        pci_bus = int(checked_lookup(child, "pci_bus"), base=0)
+                        pci_dev = int(checked_lookup(child, "pci_dev"), base=0)
+                        pci_func = int(checked_lookup(child, "pci_func"), base=0)
+                        handle = int(checked_lookup(child, "handle"), base=0)
+                        # @ivanv: error checking for all of these fields
+                        irqs.append(SysIrq(irq=irq, id_=irq_id, type_=irq_type, pci_bus=pci_bus, pci_dev=pci_dev, pci_func=pci_func, handle=handle))
+                    elif irq_type == "ioapic":
+                        # Check that only ioapic, pin, level, polarity are set.
+                        _check_attrs(child, ("irq", "id", "type", "ioapic", "pin", "level", "polarity"))
+                        ioapic = int(checked_lookup(child, "ioapic"), base=0)
+                        pin = int(checked_lookup(child, "pin"), base=0)
+                        level = str_to_bool(child.attrib.get("level", "true"))
+                        polarity = checked_lookup(child, "polarity")
+                        # @ivanv: error checking for all of these fields
+
+                        if polarity != "high" and polarity != "low":
+                            raise ValueError("polarity must be 'low' or 'high'")
+
+                        if polarity == "low":
+                            polarity = Sel4x86IoapicPolarity.Low
+                        elif polarity == "high":
+                            polarity = Sel4x86IoapicPolarity.High
+
+                        irqs.append(SysIrq(irq=irq, id_=irq_id, type_=irq_type, ioapic=ioapic, pin=pin, level=level, polarity=polarity))
+                    else:
+                        irqs.append(SysIrq(irq=irq, id_=irq_id))
                 else:
-                    raise UserError(f"Invalid IRQ trigger '{trigger_str}': {child._loc_str}")
-                irqs.append(SysIrq(irq, irq_id, trigger))
+                    _check_attrs(child, ("id", "irq", "trigger"))
+                    trigger_str = child.attrib.get("trigger", "level")
+                    if trigger_str == "level":
+                        trigger = Sel4IrqTrigger.Level
+                    elif trigger_str == "edge":
+                        trigger = Sel4IrqTrigger.Edge
+                    else:
+                        raise UserError(f"Invalid IRQ trigger '{trigger_str}': {child._loc_str}")
+
+                    irqs.append(SysIrq(irq=irq, id_=irq_id, trigger=trigger))
             elif child.tag == "setvar":
                 _check_attrs(child, ("symbol", "region_paddr"))
                 symbol = checked_lookup(child, "symbol")

@@ -910,7 +910,29 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
                 capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr=map.vaddr + i * mr.page_size)
 
         for sysirq in pd.irqs:
-            irq = capdl.IRQ(f"irq_{sysirq.irq}", number=sysirq.irq)
+            if kernel_config.arch == KernelArch.X86_64 and sysirq.type_:
+                if sysirq.type_ == "msi":
+                    irq = MSIIRQ(
+                        f"msi_irq_{sysirq.irq}",
+                        vector=sysirq.irq,
+                        handle=sysirq.handle,
+                        bus=sysirq.pci_bus,
+                        dev=sysirq.pci_dev,
+                        fun=sysirq.pci_func
+                    )
+                elif sysirq.type_ == "ioapic":
+                    irq = IOAPICIRQ(
+                        f"ioapic_irq_{sysirq.irq}",
+                        vector=sysirq.irq,
+                        ioapic=sysirq.ioapic,
+                        pin=sysirq.pin,
+                        level=sysirq.level,
+                        polarity=sysirq.polarity.value
+                    )
+                else:
+                    raise Exception("Error! unexpected irq type")
+            else:
+                irq = capdl.IRQ(f"irq_{sysirq.irq}", number=sysirq.irq)
             cdl_spec.add_object(irq)
             cspace[BASE_IRQ_CAP + sysirq.id_] = capdl.Cap(irq, read=True)
             cap = capdl.Cap(ntfn, read=True)
@@ -2306,6 +2328,7 @@ def main() -> int:
         num_cpus = kernel_config.num_cpus,
         kernel_is_hypervisor = kernel_config.hyp_mode,
         aarch64_smc_calls_allowed = kernel_config.aarch64_smc_calls,
+        arch = kernel_config.arch,
     )
     system_description = xml2system(args.system, default_platform_description)
 
