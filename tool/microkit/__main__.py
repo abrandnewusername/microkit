@@ -755,7 +755,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             pd[pd_slot] = capdl.Cap(pt)
         assert isinstance(pt, capdl.PageTable)
 
-        pt_slot = aarch64_get_pt_slot(vaddr)
+        pt_slot = x86_64_get_pt_slot(vaddr)
         assert pt.slots.get(pt_slot) is None, f"4KiB page already mapped at virtual address {vaddr}"
         pt[pt_slot] = page_cap
 
