@@ -153,7 +153,7 @@ monitor(void)
 
         // seL4_Word tcb_cap = tcbs[badge];
 
-        puts("received message ");
+        puts("MON|INFO: received message ");
         puthex32(label);
         puts("  badge: ");
         puthex64(badge);
