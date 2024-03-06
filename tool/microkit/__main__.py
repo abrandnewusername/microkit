@@ -841,7 +841,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     # capdl for pds
     for i, pd in enumerate(system.protection_domains):
         path = _get_full_path(pd.program_image, search_paths).resolve()
-        elf = capdl.ELF(str(path), name=path.name, arch=capdl_arch)
+        elf = capdl.ELF(str(path), name=pd.name, arch=capdl_arch)
         elf_spec = elf.get_spec(infer_asid=False)
         tcb = next(x for x in elf_spec.objs if isinstance(x, capdl.TCB))
         tcb.sp = elf.get_symbol_vaddr("_stack")

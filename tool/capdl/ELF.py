@@ -50,6 +50,7 @@ class ELF(object):
         else:
             f = elf
         self._elf = ELFFile(f)
+        self.elf_name = elf
         self.name = name
         self._symtab = None
         self.arch = arch or self.get_arch()
@@ -134,7 +135,7 @@ class ELF(object):
         length = min(size-dest_offset, seg_p_filesz-section_offset)
         src_offset = seg_p_offset + section_offset
 
-        return ["%d %d CDL_FrameFill_FileData \"%s\" %d" % (dest_offset, length, self.name, src_offset)]
+        return ["%d %d CDL_FrameFill_FileData \"%s\" %d" % (dest_offset, length, self.elf_name, src_offset)]
 
     def get_pages(self, infer_asid=True, pd=None, use_large_frames=True, addr_space=None):
         """
