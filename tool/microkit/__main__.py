@@ -817,11 +817,13 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     cdl_spec.add_object(monitor_reply_object)
     monitor_cspace[MONITOR_REPLY_CAP_IDX] = capdl.Cap(monitor_reply_object, read=True, write=True)
 
+    # monitor_tcb["reply_slot"] = capdl.Cap(monitor_reply_object, read=True, write=True)
+
     monitor_ipc_vaddr = monitor_elf.get_symbol_vaddr("__sel4_ipc_buffer_obj")
     monitor_tcb.addr = monitor_ipc_vaddr
     monitor_page = capdl.Frame(f"ipcbuf_monitor")
     cdl_spec.add_object(monitor_page)
-    monitor_ipc_page_cap = capdl.Cap(monitor_page, read=True, write=True)
+    monitor_ipc_page_cap = capdl.Cap(monitor_page, read=True, write=True, grant=True, grantreply=True)
     capdl_page_map(cdl_spec, kernel_config, "monitor", monitor_vspace, monitor_ipc_page_cap, monitor_ipc_vaddr)
     monitor_tcb["ipc_buffer_slot"] = monitor_ipc_page_cap
 
@@ -858,8 +860,16 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         cspace[INPUT_CAP_IDX] = capdl.Cap(ntfn, read=True, write=True)
         pd_to_ntfn[pd] = ntfn
 
-        cspace[5] = capdl.Cap(monitor_fault_ep, badge=i + 1, read=True, write=True, grant=True, grantreply=True)
-        tcb.set_fault_ep_slot(fault_ep_slot=5, fault_ep=f"monitor_fault_ep", badge=i + 1)
+        pd_reply_object = capdl.RTReply(f"reply_object_{pd.name}")
+        cdl_spec.add_object(pd_reply_object)
+        cspace[REPLY_CAP_IDX] = capdl.Cap(pd_reply_object, read=True, write=True)
+
+        # tcb["reply_slot"] = cspace[REPLY_CAP_IDX]
+
+        tcb["bound_notification"] = cspace[INPUT_CAP_IDX]
+
+        cspace[FAULT_EP_CAP_IDX] = capdl.Cap(monitor_fault_ep, badge=i + 1, read=True, write=True, grant=True, grantreply=True)
+        tcb.set_fault_ep_slot(fault_ep_slot=FAULT_EP_CAP_IDX, fault_ep=f"monitor_fault_ep", badge=i + 1)
 
         scheduling_context = capdl.SC(f"scheduling_context_{pd.name}", period=pd.period, budget=pd.budget)
         tcb["sc_slot"] = capdl.Cap(scheduling_context, read=True, write=True)
@@ -934,10 +944,10 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             else:
                 irq = capdl.IRQ(f"irq_{sysirq.irq}", number=sysirq.irq)
             cdl_spec.add_object(irq)
-            cspace[BASE_IRQ_CAP + sysirq.id_] = capdl.Cap(irq, read=True)
-            cap = capdl.Cap(ntfn, read=True)
-            cap.set_badge(1 << sysirq.id_)
-            irq.set_notification(cap)
+            cspace[BASE_IRQ_CAP + sysirq.id_] = capdl.Cap(irq, read=True, write=True, grant=True, grantreply=True)
+            ntfn_irq_cap = capdl.Cap(ntfn, read=True, write=True, grant=True, grantreply=True)
+            ntfn_irq_cap.set_badge(1 << sysirq.id_)
+            irq.set_notification(ntfn_irq_cap)
 
         if pd.pp:
             raise Exception("FIXME: deal with pds with pps")
