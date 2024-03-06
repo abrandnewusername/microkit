@@ -39,6 +39,7 @@ __attribute__((weak)) microkit_msginfo protected(microkit_channel ch, microkit_m
 
 __attribute__((weak)) void fault(microkit_id id, microkit_msginfo msginfo)
 {
+    microkit_dbg_puts("ERROR: fault entry point not implemented\n");
 }
 
 static void
