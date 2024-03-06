@@ -5,7 +5,15 @@
  SPDX-License-Identifier: BSD-2-Clause
 -->
 <system>
-    <protection_domain name="hello" priority="1">
-        <program_image path="hello.elf" />
+    <protection_domain name="server" priority="100" pp="true">
+        <program_image path="server.elf" />
     </protection_domain>
+    <protection_domain name="client" priority="1">
+        <program_image path="client.elf" />
+    </protection_domain>
+
+    <channel>
+        <end pd="server" id="2" />
+        <end pd="client" id="3" />
+    </channel>
 </system>
