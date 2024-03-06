@@ -38,7 +38,7 @@ else ifeq ($(ARCH),riscv32)
 	ASM_CPP_FLAGS := -x assembler-with-cpp -c -g -march=rv32imac -mabi=ilp32
 	ASM_FLAGS := -g -march=rv32imac -mabi=ilp32
 else ifeq ($(ARCH),x86_64)
-	C_FLAGS := -std=gnu11 -g -O3 -nostdlib -ffreestanding -march=$(GCC_MARCH) -mabi=sysv -DARCH_x86_64 -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
+	C_FLAGS := -std=gnu11 -g -O3 -nostdlib -ffreestanding -mabi=sysv -DARCH_x86_64 -Wall -Wno-maybe-uninitialized -Werror -I$(SEL4_SDK)/include
 	ASM_CPP_FLAGS := -x assembler-with-cpp -c -g
 	ASM_FLAGS := -g -march=generic64
 else

@@ -39,7 +39,7 @@ else ifeq ($(ARCH),riscv32)
 	ASM_FLAGS_ARCH := -g -march=$(MARCH) -mabi=$(MABI)
 	ARCH_DIR := riscv
 else ifeq ($(ARCH),x86_64)
-	C_FLAGS_ARCH := -march=$(GCC_MARCH) -DARCH_x86_64
+	C_FLAGS_ARCH := -DARCH_x86_64
 	ASM_CPP_FLAGS_ARCH := -march=generic64
 	ASM_FLAGS_ARCH := -march=generic64
 	ARCH_DIR := x86_64
