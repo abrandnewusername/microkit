@@ -980,12 +980,12 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
 
         if pd_b.pp:
             pp_ch_cap = BASE_OUTPUT_ENDPOINT_CAP + cc.id_a
-            pp_ch_badge = (1 << 63) | cc.id_a
+            pp_ch_badge = (1 << 63) | cc.id_b
             pd_a_cspace[pp_ch_cap] = capdl.Cap(pd_b_endpoint, read=True, write=True, badge=pp_ch_badge)
 
         if pd_a.pp:
             pp_ch_cap = BASE_OUTPUT_ENDPOINT_CAP + cc.id_b
-            pp_ch_badge = (1 << 63) | cc.id_b
+            pp_ch_badge = (1 << 63) | cc.id_a
             pd_b_cspace[pp_ch_cap] = capdl.Cap(pd_a_endpoint, read=True, write=True, badge=pp_ch_badge)
 
     return cdl_spec
