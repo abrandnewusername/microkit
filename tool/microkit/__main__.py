@@ -880,7 +880,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         cspace[FAULT_EP_CAP_IDX] = capdl.Cap(monitor_fault_ep, badge=i + 1, read=True, write=True, grant=True, grantreply=True)
         tcb.set_fault_ep_slot(fault_ep_slot=FAULT_EP_CAP_IDX, fault_ep=f"monitor_fault_ep", badge=i + 1)
 
-        scheduling_context = capdl.SC(f"scheduling_context_{pd.name}", period=pd.period, budget=pd.budget)
+        scheduling_context = capdl.SC(f"scheduling_context_{pd.name}", period=pd.period, budget=pd.budget, size_bits=8)
         tcb["sc_slot"] = capdl.Cap(scheduling_context, read=True, write=True)
         cdl_spec.add_object(scheduling_context)
         # scheduling_control = capdl.SchedControl(f"scheduling_control_{pd.name}")
