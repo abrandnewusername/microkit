@@ -837,6 +837,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
 
     pd_to_cspace = {}
     pd_to_ntfn = {}
+    pd_to_endpoint = {}
     # capdl for pds
     for i, pd in enumerate(system.protection_domains):
         path = _get_full_path(pd.program_image, search_paths).resolve()
@@ -857,16 +858,24 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
 
         ntfn = capdl.Notification(f"ntfn_{pd.name}")
         cdl_spec.add_object(ntfn)
-        cspace[INPUT_CAP_IDX] = capdl.Cap(ntfn, read=True, write=True)
+
+        endpoint = capdl.Endpoint(f"endpoint_{pd.name}")
+        cdl_spec.add_object(endpoint)
+
+        if pd.needs_ep:
+            cspace[INPUT_CAP_IDX] = capdl.Cap(endpoint, read=True, write=True)
+            tcb["bound_notification"] = capdl.Cap(ntfn, read=True, write=True)
+        else:
+            cspace[INPUT_CAP_IDX] = capdl.Cap(ntfn, read=True, write=True)
+            tcb["bound_notification"] = cspace[INPUT_CAP_IDX]
         pd_to_ntfn[pd] = ntfn
+        pd_to_endpoint[pd] = endpoint
 
         pd_reply_object = capdl.RTReply(f"reply_object_{pd.name}")
         cdl_spec.add_object(pd_reply_object)
         cspace[REPLY_CAP_IDX] = capdl.Cap(pd_reply_object, read=True, write=True)
 
         # tcb["reply_slot"] = cspace[REPLY_CAP_IDX]
-
-        tcb["bound_notification"] = cspace[INPUT_CAP_IDX]
 
         cspace[FAULT_EP_CAP_IDX] = capdl.Cap(monitor_fault_ep, badge=i + 1, read=True, write=True, grant=True, grantreply=True)
         tcb.set_fault_ep_slot(fault_ep_slot=FAULT_EP_CAP_IDX, fault_ep=f"monitor_fault_ep", badge=i + 1)
@@ -949,9 +958,6 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             ntfn_irq_cap.set_badge(1 << sysirq.id_)
             irq.set_notification(ntfn_irq_cap)
 
-        if pd.pp:
-            raise Exception("FIXME: deal with pds with pps")
-
     for cc in system.channels:
         pd_a = system.pd_by_name[cc.pd_a]
         pd_b = system.pd_by_name[cc.pd_b]
@@ -959,6 +965,8 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         pd_b_cspace = pd_to_cspace[pd_b]
         pd_a_ntfn = pd_to_ntfn[pd_a]
         pd_b_ntfn = pd_to_ntfn[pd_b]
+        pd_a_endpoint = pd_to_endpoint[pd_a]
+        pd_b_endpoint = pd_to_endpoint[pd_b]
 
         pd_a_cap_idx = BASE_OUTPUT_NOTIFICATION_CAP + cc.id_a
         pd_a_badge = 1 << cc.id_b
@@ -970,10 +978,15 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         # FIXME: check rights
         pd_b_cspace[pd_b_cap_idx] = capdl.Cap(pd_a_ntfn, read=True, write=True, badge=pd_b_badge)
 
-        # FIXME: deal with cases where pd_a or pd_b have pps
+        if pd_b.pp:
+            pp_ch_cap = BASE_OUTPUT_ENDPOINT_CAP + cc.id_a
+            pp_ch_badge = (1 << 63) | cc.id_a
+            pd_a_cspace[pp_ch_cap] = capdl.Cap(pd_b_endpoint, read=True, write=True, badge=pp_ch_badge)
 
-    # Write out the TCB caps to the monitor symbol for fault handling.
-    # monitor_elf.write_symbol("tcbs", pack("<Q" + "Q" * len(tcb_caps), 0, *tcb_caps))
+        if pd_a.pp:
+            pp_ch_cap = BASE_OUTPUT_ENDPOINT_CAP + cc.id_b
+            pp_ch_badge = (1 << 63) | cc.id_b
+            pd_b_cspace[pp_ch_cap] = capdl.Cap(pd_a_endpoint, read=True, write=True, badge=pp_ch_badge)
 
     return cdl_spec
 
