@@ -8,12 +8,19 @@
     <protection_domain name="server" priority="100" pp="true">
         <program_image path="server.elf" />
     </protection_domain>
-    <protection_domain name="client" priority="1">
+    <protection_domain name="client-1" priority="1">
+        <program_image path="client.elf" />
+    </protection_domain>
+    <protection_domain name="client-2" priority="1">
         <program_image path="client.elf" />
     </protection_domain>
 
     <channel>
         <end pd="server" id="2" />
-        <end pd="client" id="3" />
+        <end pd="client-1" id="3" />
+    </channel>
+    <channel>
+        <end pd="server" id="3" />
+        <end pd="client-2" id="3" />
     </channel>
 </system>
