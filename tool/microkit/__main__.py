@@ -960,7 +960,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             irq.set_notification(ntfn_irq_cap)
 
         for sysioport in pd.x86_ioports:
-            ioport = capdl.IOPorts(f"ioport_{sysioport.ioport}", start_port=sysioport.start, end_port=sysioport.end)
+            ioport = capdl.IOPorts(f"ioport_{pd.name}_{sysioport.ioport}", start_port=sysioport.start, end_port=sysioport.end)
             cdl_spec.add_object(ioport)
             cspace[BASE_IOPORT_CAP + sysioport.ioport] = capdl.Cap(ioport, read=True, write=True)
 
