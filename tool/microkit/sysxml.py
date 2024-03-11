@@ -89,6 +89,13 @@ class SysIrq:
 
 
 @dataclass(frozen=True, eq=True)
+class SysX86IOPort:
+    ioport: int
+    start: int
+    end: int
+
+
+@dataclass(frozen=True, eq=True)
 class SysSetVar:
     symbol: str
     region_paddr: Optional[str] = None
@@ -109,6 +116,7 @@ class ProtectionDomain:
     program_image: Path
     maps: Tuple[SysMap, ...]
     irqs: Tuple[SysIrq, ...]
+    x86_ioports: Tuple[SysX86IOPort, ...]
     setvars: Tuple[SysSetVar, ...]
     child_pds: Tuple["ProtectionDomain", ...]
     parent: Optional["ProtectionDomain"]
@@ -233,6 +241,28 @@ class SystemDescription:
                     raise UserError(f"duplicate irq: {sysirq.irq} in protection domain: '{pd.name}' @ {pd.element._loc_str}")  # type: ignore
                 all_irqs.add(sysirq.irq)
 
+        # Ensure no duplicate IOPorts
+        all_ioports = set()
+        for pd in self.protection_domains:
+            for sysioport in pd.x86_ioports:
+                if sysioport.ioport in all_ioports:
+                    raise UserError(f"duplicate ioport: {sysioport.ioport} in protection domain: '{pd.name}' @ {pd.element._loc_str}")  # type: ignore
+                all_ioports.add(sysioport.ioport)
+
+        # Ensure no IOPort ranges overlap
+        all_ioport_range = set()
+        for pd in self.protection_domains:
+            for sysioport in pd.x86_ioports:
+                for ioport_range in all_ioport_range:
+                    # We already have the invariant that sysioport.start is less than sysioport.end,
+                    # so no need to check here.
+                    if sysioport.start >= ioport_range[1] or sysioport.end <= ioport_range[0]:
+                        continue
+                    else:
+                        raise UserError(f"Invalid ioport: {sysioport.ioport}, port range [{sysioport.start}..{sysioport.end:x}) overlaps with [{ioport_range[0]:x}..{ioport_range[1]:x})",
+                                        f" in protection domain: '{pd.name}' @ {pd.element._loc_str}")  # type: ignore
+                all_ioport_range.add((sysioport.start, sysioport.end))
+
         # Ensure no duplicate channel identifiers
         ch_ids: Dict[str, Set[int]] = {pd_name: set() for pd_name in self.pd_by_name}
         for pd in self.protection_domains:
@@ -338,6 +368,7 @@ def xml2pd(pd_xml: ET.Element, plat_desc: PlatformDescription, is_child: bool=Fa
 
     maps = []
     irqs = []
+    x86_ioports = []
     setvars = []
     child_pds = []
     virtual_machine = None
@@ -425,6 +456,19 @@ def xml2pd(pd_xml: ET.Element, plat_desc: PlatformDescription, is_child: bool=Fa
                 if virtual_machine is not None:
                     raise UserError("virtual_machine must only be specified once")
                 virtual_machine = xml2vm(child, plat_desc)
+            elif child.tag == "ioport":
+                # First check we're actually on x86
+                if plat_desc.arch != KernelArch.X86_64:
+                    raise UserError(f"attempting to use IOPort on non-x86 architecture: {child._loc_str}")
+
+                _check_attrs(child, ("ioport", "start", "end"))
+                ioport = int(checked_lookup(child, "ioport"), base=0)
+                start = int(checked_lookup(child, "start"), base=0)
+                end = int(checked_lookup(child, "end"), base=0)
+                if start >= end:
+                    raise UserError(f"Invalid IOPort range [{start:x}..{end:x}), end must be greater than start: {child._loc_str}")
+
+                x86_ioports.append(SysX86IOPort(ioport, start, end))
             else:
                 raise UserError(f"Invalid XML element '{child.tag}': {child._loc_str}")  # type: ignore
         except ValueError as e:
@@ -446,6 +490,7 @@ def xml2pd(pd_xml: ET.Element, plat_desc: PlatformDescription, is_child: bool=Fa
         program_image,
         tuple(maps),
         tuple(irqs),
+        tuple(x86_ioports),
         tuple(setvars),
         tuple(child_pds),
         None,

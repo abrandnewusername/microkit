@@ -164,6 +164,7 @@ BASE_IRQ_CAP = BASE_OUTPUT_ENDPOINT_CAP + 64
 BASE_TCB_CAP = BASE_IRQ_CAP + 64
 BASE_VM_TCB_CAP = BASE_TCB_CAP + 64
 BASE_VCPU_CAP = BASE_VM_TCB_CAP + 64
+BASE_IOPORT_CAP = BASE_VCPU_CAP + 64
 MAX_SYSTEM_INVOCATION_SIZE = mb(128)
 PD_CAPTABLE_BITS = 12
 PD_CAP_SIZE = 512
@@ -957,6 +958,11 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             ntfn_irq_cap = capdl.Cap(ntfn, read=True, write=True, grant=True, grantreply=True)
             ntfn_irq_cap.set_badge(1 << sysirq.id_)
             irq.set_notification(ntfn_irq_cap)
+
+        for sysioport in pd.x86_ioports:
+            ioport = capdl.IOPorts(f"ioport_{sysioport.ioport}", start_port=sysioport.start, end_port=sysioport.end)
+            cdl_spec.add_object(ioport)
+            cspace[BASE_IOPORT_CAP + sysioport.ioport] = capdl.Cap(ioport, read=True, write=True)
 
     for cc in system.channels:
         pd_a = system.pd_by_name[cc.pd_a]

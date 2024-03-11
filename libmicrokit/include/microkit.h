@@ -16,6 +16,7 @@
 
 typedef unsigned int microkit_channel;
 typedef unsigned int microkit_id;
+typedef unsigned int microkit_ioport;
 typedef seL4_MessageInfo_t microkit_msginfo;
 
 #define REPLY_CAP 4
@@ -28,6 +29,7 @@ typedef seL4_MessageInfo_t microkit_msginfo;
 #define BASE_TCB_CAP 202
 #define BASE_VM_TCB_CAP 266
 #define BASE_VCPU_CAP 330
+#define BASE_IOPORT_CAP 394
 
 #define MICROKIT_MAX_CHANNELS 62
 
@@ -302,5 +304,67 @@ microkit_riscv_vcpu_write_reg(microkit_id vm, uint64_t reg, uint64_t value)
         microkit_dbg_puts("microkit_riscv_vcpu_write_reg: error VPPI\n");
         microkit_internal_crash(err);
     }
+}
+#endif
+
+#if defined(CONFIG_ARCH_X86)
+static inline void microkit_x86_ioport_write_8(microkit_ioport ioport, seL4_Word port, seL4_Word data) {
+    seL4_Error err;
+    err = seL4_X86_IOPort_Out8(BASE_IOPORT_CAP + ioport, port, data);
+    if (err != seL4_NoError) {
+        microkit_dbg_puts("microkit_x86_ioport_write_8: error writing data\n");
+        microkit_internal_crash(err);
+    }
+}
+
+static inline void microkit_x86_ioport_write_16(microkit_ioport ioport, seL4_Word port, seL4_Word data) {
+    seL4_Error err;
+    err = seL4_X86_IOPort_Out16(BASE_IOPORT_CAP + ioport, port, data);
+    if (err != seL4_NoError) {
+        microkit_dbg_puts("microkit_x86_ioport_write_16: error writing data\n");
+        microkit_internal_crash(err);
+    }
+}
+
+static inline void microkit_x86_ioport_write_32(microkit_ioport ioport, seL4_Word port, seL4_Word data) {
+    seL4_Error err;
+    err = seL4_X86_IOPort_Out32(BASE_IOPORT_CAP + ioport, port, data);
+    if (err != seL4_NoError) {
+        microkit_dbg_puts("microkit_x86_ioport_write_32: error writing data\n");
+        microkit_internal_crash(err);
+    }
+}
+
+static inline seL4_Uint8 microkit_x86_ioport_read_8(microkit_ioport ioport, seL4_Word port) {
+    seL4_X86_IOPort_In8_t ret;
+    ret = seL4_X86_IOPort_In8(BASE_IOPORT_CAP + ioport, port);
+    if (ret.error != seL4_NoError) {
+        microkit_dbg_puts("microkit_x86_ioport_read_8: error reading data\n");
+        microkit_internal_crash(ret.error);
+    }
+
+    return ret.result;
+}
+
+static inline seL4_Uint16 microkit_x86_ioport_read_16(microkit_ioport ioport, seL4_Word port) {
+    seL4_X86_IOPort_In16_t ret;
+    ret = seL4_X86_IOPort_In16(BASE_IOPORT_CAP + ioport, port);
+    if (ret.error != seL4_NoError) {
+        microkit_dbg_puts("microkit_x86_ioport_read_16: error reading data\n");
+        microkit_internal_crash(ret.error);
+    }
+
+    return ret.result;
+}
+
+static inline seL4_Uint32 microkit_x86_ioport_read_32(microkit_ioport ioport, seL4_Word port) {
+    seL4_X86_IOPort_In32_t ret;
+    ret = seL4_X86_IOPort_In32(BASE_IOPORT_CAP + ioport, port);
+    if (ret.error != seL4_NoError) {
+        microkit_dbg_puts("microkit_x86_ioport_read_32: error reading data\n");
+        microkit_internal_crash(ret.error);
+    }
+
+    return ret.result;
 }
 #endif
