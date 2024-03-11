@@ -258,7 +258,22 @@ monitor(void)
                 break;
             }
             case seL4_Fault_UserException: {
-                puts("UserException\n");
+                seL4_Word ip = seL4_GetMR(seL4_UserException_FaultIP);
+                seL4_Word sp = seL4_GetMR(seL4_UserException_SP);
+                seL4_Word flags = seL4_GetMR(seL4_UserException_FLAGS);
+                seL4_Word number = seL4_GetMR(seL4_UserException_Number);
+                seL4_Word code = seL4_GetMR(seL4_UserException_Code);
+                puts("UserException: ip=");
+                puthex64(ip);
+                puts("  sp=");
+                puthex64(sp);
+                puts("  flags=");
+                puthex64(flags);
+                puts("  number=");
+                puthex64(number);
+                puts("  code=");
+                puthex64(code);
+                puts("\n");
                 break;
             }
             case seL4_Fault_VMFault: {
