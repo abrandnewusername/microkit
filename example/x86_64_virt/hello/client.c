@@ -7,6 +7,7 @@
 #include <microkit.h>
 
 #define SERVER_CH 3
+#define IOPORT 1
 
 void
 init(void)
@@ -15,6 +16,8 @@ init(void)
     microkit_msginfo msginfo = microkit_msginfo_new(1, 0);
     msginfo = microkit_ppcall(SERVER_CH, msginfo);
     microkit_dbg_puts("CLIENT: back!\n");
+    microkit_dbg_puts("CLIENT: about to access IOPORT!\n");
+    microkit_x86_ioport_write_8(IOPORT, 3, 1);
 }
 
 void
