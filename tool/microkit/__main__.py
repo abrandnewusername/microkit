@@ -924,7 +924,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             mr = mr_by_name[map.mr]
             for i in range(mr.page_count):
                 paddr = None if mr.phys_addr is None else mr.phys_addr + i * mr.page_size
-                page = capdl.Frame(f"mr_{map.mr}_{i}", paddr=paddr, size=mr.page_size)
+                page = capdl.Frame(f"mr_{map.mr}_{pd.name}_{i}", paddr=paddr, size=mr.page_size)
                 cdl_spec.add_object(page)
                 cap = capdl.Cap(page, read="r" in map.perms, write="w" in map.perms, grant="x" in map.perms, cached=map.cached)
                 capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr=map.vaddr + i * mr.page_size)
