@@ -44,7 +44,7 @@ CARGO_OPTIONS := \
 	--manifest-path $(rust_source_path)/Cargo.toml \
 	--target-dir $(abspath $(target_dir)) \
 	--out-dir $(abspath $(BUILD_DIR)) \
-	--config $(abspath $(rust_source_path)/.cargo/config)
+	--config $(abspath $(rust_source_path)/.cargo/config.toml)
 
 CARGO_CROSS_OPTIONS := \
 	$(CARGO_OPTIONS) \
