@@ -23,6 +23,14 @@ microkit_msginfo protected(microkit_channel ch, microkit_msginfo msginfo) {
         if (microkit_msginfo_get_label(msginfo) == 1) {
             microkit_dbg_puts("SERVER: correct label!\n");
         }
+        uintptr_t test_mr = 0x3000000;
+        char *c = (char *) test_mr;
+        if (c[0] != 'a') {
+            microkit_dbg_puts("SERVER: UH OH\n");
+        }
+        if (c[0x10000] != 'b') {
+            microkit_dbg_puts("SERVER: UH OH\n");
+        }
 
         return microkit_msginfo_new(2, 0);
     }

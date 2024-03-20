@@ -5,12 +5,16 @@
  SPDX-License-Identifier: BSD-2-Clause
 -->
 <system>
+    <memory_region name="test" size="0x200000" page_size="0x200000" />
+
     <protection_domain name="server" priority="100" pp="true">
         <program_image path="server.elf" />
+        <map mr="test" vaddr="0x3_000_000" perms="rw" cached="true" />
     </protection_domain>
     <protection_domain name="client-1" priority="1">
         <program_image path="client.elf" />
         <ioport ioport="1" start="3" end="4" />
+        <map mr="test" vaddr="0x4_000_000" perms="rw" cached="true" />
     </protection_domain>
 
     <channel>
