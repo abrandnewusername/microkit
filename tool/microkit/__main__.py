@@ -836,6 +836,14 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
     # monitor_scheduling_control = capdl.SchedControl("monitor_scheduling_control")
     # cdl_spec.add_object(monitor_scheduling_control)
 
+    page_by_mr = {mr.name: [] for mr in system.memory_regions}
+    for mr in system.memory_regions:
+        for i in range(mr.page_count):
+            paddr = None if mr.phys_addr is None else mr.phys_addr + i * mr.page_size
+            page = capdl.Frame(f"mr_{mr.name}_{i}", paddr=paddr, size=mr.page_size)
+            cdl_spec.add_object(page)
+            page_by_mr[mr.name].append(page)
+
     pd_to_cspace = {}
     pd_to_ntfn = {}
     pd_to_endpoint = {}
@@ -919,15 +927,13 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         #         assert kernel_config.word_size == 64, "FIXME: we assume addresses are 64 bits"
         #         f.write(pack("<Q", value))
 
-        mr_by_name = {mr.name: mr for mr in system.memory_regions}
-        for map in pd.maps:
-            mr = mr_by_name[map.mr]
+        for pd_map in pd.maps:
+            pages = page_by_mr[pd_map.mr]
+            perms = pd_map.perms
+            cached = pd_map.cached
             for i in range(mr.page_count):
-                paddr = None if mr.phys_addr is None else mr.phys_addr + i * mr.page_size
-                page = capdl.Frame(f"mr_{map.mr}_{pd.name}_{i}", paddr=paddr, size=mr.page_size)
-                cdl_spec.add_object(page)
-                cap = capdl.Cap(page, read="r" in map.perms, write="w" in map.perms, grant="x" in map.perms, cached=map.cached)
-                capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr=map.vaddr + i * mr.page_size)
+                cap = capdl.Cap(pages[i], read="r" in perms, write="w" in perms, grant="x" in perms, cached=cached)
+                capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr=pd_map.vaddr + i * mr.page_size)
 
         for sysirq in pd.irqs:
             if kernel_config.arch == KernelArch.X86_64 and sysirq.type_:
