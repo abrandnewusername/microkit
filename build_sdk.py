@@ -468,6 +468,7 @@ SUPPORTED_BOARDS = (
             "KernelSupportPCID": False,
             "KernelFSGSBaseInst": False,
             "KernelFPU": "FXSAVE",
+            "KernelIOMMU": False,
         },
         examples = {
             "hello": Path("example/x86_64_virt/hello")
@@ -487,6 +488,7 @@ SUPPORTED_BOARDS = (
             "KernelSupportPCID": False,
             "KernelFSGSBaseInst": False,
             "KernelFPU": "FXSAVE",
+            "KernelIOMMU": False,
         },
         examples = {
             "hello": Path("example/x86_64_virt/hello")
