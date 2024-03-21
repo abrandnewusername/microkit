@@ -931,8 +931,8 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
             pages = page_by_mr[pd_map.mr]
             perms = pd_map.perms
             cached = pd_map.cached
-            for i in range(mr.page_count):
-                cap = capdl.Cap(pages[i], read="r" in perms, write="w" in perms, grant="x" in perms, cached=cached)
+            for i, page in enumerate(pages):
+                cap = capdl.Cap(page, read="r" in perms, write="w" in perms, grant="x" in perms, cached=cached)
                 capdl_page_map(cdl_spec, kernel_config, pd.name, vspace, cap, vaddr=pd_map.vaddr + i * mr.page_size)
 
         for sysirq in pd.irqs:
