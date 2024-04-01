@@ -853,6 +853,7 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
         elf = capdl.ELF(str(path), name=pd.name, arch=capdl_arch)
         elf_spec = elf.get_spec(infer_asid=False)
         tcb = next(x for x in elf_spec.objs if isinstance(x, capdl.TCB))
+        tcb.affinity = pd.cpu_affinity
         tcb.sp = elf.get_symbol_vaddr("_stack")
         tcb.prio = pd.priority
         vspace = next(x for x in elf_spec.objs if isinstance(x, top_level_vspace_object))
