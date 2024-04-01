@@ -494,6 +494,25 @@ SUPPORTED_BOARDS = (
             "hello": Path("example/x86_64_virt/hello")
         }
     ),
+    BoardInfo(
+        name="vb_105_smp",
+        arch=BoardArch.X86_64,
+        gcc_flags = "GCC_MARCH=skylake",
+        loader_link_address=0x10000000, # 256MB
+        kernel_options = {
+            "KernelIsMCS": True,
+            "KernelPlatform": "pc99",
+            "KernelSel4Arch": "x86_64",
+            # "KernelVTX": True,
+            "KernelX86MicroArch": "skylake",
+            "KernelSupportPCID": False,
+            "KernelFSGSBaseInst": False,
+            "KernelFPU": "FXSAVE",
+            "KernelIOMMU": False,
+            "KernelMaxNumNodes": 6
+        },
+        examples = {}
+    ),
 )
 
 SUPPORTED_CONFIGS = (
