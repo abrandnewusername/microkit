@@ -22,7 +22,7 @@ struct XmlSystemDescription {
     pub protection_domain: Vec<XmlProtectionDomain>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysMap {
     mr: String,
     vaddr: u64,
@@ -30,21 +30,21 @@ pub struct SysMap {
     cached: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysIrq {
     irq: u64,
     id: u64,
     // TODO: trigger
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysSetVar {
     symbol: String,
     region_paddr: Option<String>,
     vaddr: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ProtectionDomain {
     pub name: String,
     pub priority: u32,

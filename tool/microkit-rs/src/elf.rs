@@ -99,7 +99,7 @@ pub struct ElfSegment {
     attrs: u32,
 }
 
-enum SegmentAttributes {
+enum ElfSegmentAttributes {
     PF_X = 0x1,
     PF_W = 0x2,
     PF_R = 0x4
@@ -229,13 +229,43 @@ impl ElfFile {
         Ok(ElfFile { word_size, entry, segments, symbols })
     }
 
+    pub fn find_symbol(&self, variable_name: &str) -> (u64, u64) {
+        let mut found_sym: Option<&ElfSymbol64> = None;
+        for (name, sym) in &self.symbols {
+            if name == variable_name {
+                if found_sym.is_none() {
+                    found_sym = Some(sym);
+                } else {
+                    // TODO: return error instead?
+                    // TODO: have path of ELF file?
+                    panic!("Multiple symbols with name {}", variable_name);
+                }
+            }
+        }
+
+        if found_sym.is_none() {
+            // TODO: return error instead?
+            // TODO: have path of ELF file?
+            panic!("No symbol named {} found", variable_name);
+        }
+
+        (found_sym.unwrap().value, found_sym.unwrap().size)
+    }
+
+    pub fn get_data(&self, vaddr: u64, size: u64) -> Option<&[u8]> {
+        for seg in &self.segments {
+            if vaddr >= seg.virt_addr && vaddr + size <= seg.virt_addr + seg.data.len() as u64 {
+                let offset = (vaddr - seg.virt_addr) as usize;
+                return Some(&seg.data[offset..offset + size as usize]);
+            }
+        }
+
+        return None;
+    }
+
     fn get_string(strtab: &[u8], idx: usize) -> &str {
         // TODO: do not unwrap
         let end_idx = idx + strtab[idx..].iter().position(|&b| b == 0).unwrap();
         std::str::from_utf8(&strtab[idx..end_idx]).unwrap()
     }
-
-    // pub fn phys_mem_regions(alignment: usize) -> Vec<MemoryRegion> {
-    //     assert!(alignment > 0);
-    // }
 }

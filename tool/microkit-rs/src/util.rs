@@ -1,3 +1,13 @@
+pub fn msb(x: u64) -> u64 {
+    // TODO
+    0
+}
+
+pub fn lsb(x: u64) -> u64 {
+    // TODO
+    0
+}
+
 pub fn is_power_of_two(n: usize) -> bool {
     n & (n - 1) == 0
 }
