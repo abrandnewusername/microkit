@@ -6,9 +6,15 @@ mod sel4;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use sysxml::{parse, SystemDescription, ProtectionDomain};
+use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
 use elf::ElfFile;
 use sel4::{Invocation, Object, Rights};
+
+// TODO: use a better typed thing?
+const SEL4_ARM_PAGE_CACHEABLE: u64 = 1;
+const SEL4_ARM_PARITY_ENABLED: u64 = 2;
+const SEL4_ARM_EXECUTE_NEVER: u64 = 4;
+const SEL4_ARM_DEFAULT_VMATTRIBUTES: u64 = 3;
 
 const INPUT_CAP_IDX: usize = 1;
 const FAULT_EP_CAP_IDX: usize = 2;
@@ -42,6 +48,12 @@ const DOMAIN_CAP_ADDRESS: u64 = 11;
 const SMMU_SID_CONTROL_CAP_ADDRESS: u64 = 12;
 const SMMU_CB_CONTROL_CAP_ADDRESS: u64 = 13;
 const INIT_THREAD_SC_CAP_ADDRESS: u64 = 14;
+
+struct Region<'a> {
+    name: String,
+    addr: u64,
+    data: &'a Vec<u8>,
+}
 
 #[derive(Copy, Clone)]
 struct MemoryRegion {
@@ -688,8 +700,8 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // from this area, which can then be made available to the appropriate
     // protection domains
     let mut pd_elf_size = 0;
-    for (pd, pd_elf) in pd_elf_files.into_iter() {
-        for r in phys_mem_regions_from_elf(&pd_elf, kernel_config.minimum_page_size) {
+    for (_, pd_elf) in pd_elf_files.iter() {
+        for r in phys_mem_regions_from_elf(pd_elf, kernel_config.minimum_page_size) {
             pd_elf_size += r.size();
         }
     }
@@ -893,6 +905,178 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // page size. It would be good in the future to use super pages (when
     // it makes sense to - this would reduce memory usage, and the number of
     // invocations required to set up the address space
+    let pages_required = invocation_table_size / kernel_config.minimum_page_size;
+    let base_page_cap = 0;
+    for pta in base_page_cap..base_page_cap + pages_required {
+        cap_address_names.insert(system_cap_address_mask | pta, "SmallPage: monitor invocation table");
+    }
+
+    let mut remaining_pages = pages_required;
+    let mut invocation_table_allocations = Vec::new();
+    let mut cap_slot = base_page_cap;
+    let mut phys_addr = invocation_table_region.base;
+
+    let boot_info_device_untypeds: Vec<UntypedObject> = kernel_boot_info.untyped_objects.into_iter().filter(|o| o.is_device).collect();
+    for ut in boot_info_device_untypeds {
+        let ut_pages = ut.region.size() / kernel_config.minimum_page_size;
+        let retype_page_count = std::cmp::min(ut_pages, remaining_pages);
+        assert!(retype_page_count <= kernel_config.fan_out_limit);
+        bootstrap_invocations.push(Invocation::UntypedRetype{
+            untyped: ut.cap,
+            object_type: Object::SmallPage as u64,
+            size_bits: 0,
+            root: root_cnode_cap,
+            node_index: 1,
+            node_depth: 1,
+            node_offset: cap_slot,
+            num_objects: retype_page_count,
+        });
+
+        remaining_pages -= retype_page_count;
+        cap_slot += retype_page_count;
+        phys_addr += retype_page_count * kernel_config.minimum_page_size;
+        invocation_table_allocations.push((ut, phys_addr));
+        if remaining_pages == 0 {
+            break;
+        }
+    }
+
+    // 2.2.1: Now that physical pages have been allocated it is possible to setup
+    // the virtual memory objects so that the pages can be mapped into virtual memory
+    // At this point we map into the arbitrary address of 0x0.8000.0000 (i.e.: 2GiB)
+    // We arbitrary limit the maximum size to be 128MiB. This allows for at least 1 million
+    // invocations to occur at system startup. This should be enough for any reasonable
+    // sized system.
+    //
+    // Before mapping it is necessary to install page tables that can cover the region.
+    let page_tables_required = util::round_up(invocation_table_size, sel4::OBJECT_SIZE_LARGE_PAGE) / sel4::OBJECT_SIZE_LARGE_PAGE;
+    let page_table_allocation = kao.alloc_n(sel4::OBJECT_SIZE_PAGE_TABLE, page_tables_required);
+    let base_page_table_cap = cap_slot;
+
+    for pta in base_page_table_cap..base_page_table_cap + page_tables_required {
+        cap_address_names.insert(system_cap_address_mask | pta, "PageTable: monitor");
+    }
+
+    assert!(page_tables_required <= kernel_config.fan_out_limit);
+    bootstrap_invocations.push(Invocation::UntypedRetype{
+        untyped: page_table_allocation.untyped_cap_address,
+        object_type: Object::PageTable as u64,
+        size_bits: 0,
+        root: root_cnode_cap,
+        node_index: 1,
+        node_depth: 1,
+        node_offset: cap_slot,
+        num_objects: page_tables_required
+    });
+    cap_slot += page_tables_required;
+
+    let vaddr: u64 = 0x8000_0000;
+    // Now that the page tables are allocated they can be mapped into vspace
+    let mut pt_map_invocation = Invocation::PageTableMap{
+        page_table: system_cap_address_mask | base_page_table_cap,
+        vspace: INIT_VSPACE_CAP_ADDRESS,
+        vaddr: vaddr,
+        attr: SEL4_ARM_DEFAULT_VMATTRIBUTES,
+    };
+    pt_map_invocation.repeat(page_tables_required, Invocation::PageTableMap{
+        page_table: 1,
+        vspace: 0,
+        vaddr: Object::LargePage as u64,
+        attr: 0,
+    });
+    bootstrap_invocations.push(pt_map_invocation);
+
+    // Finally, once the page tables are allocated the pages can be mapped
+    let mut map_invocation = Invocation::PageMap{
+        page: system_cap_address_mask | base_page_cap,
+        vspace: INIT_VSPACE_CAP_ADDRESS,
+        vaddr: vaddr,
+        rights: Rights::Read as u64,
+        attr: SEL4_ARM_DEFAULT_VMATTRIBUTES | SEL4_ARM_EXECUTE_NEVER
+    };
+    map_invocation.repeat(pages_required, Invocation::PageMap{
+        page: 1,
+        vspace: 0,
+        vaddr: kernel_config.minimum_page_size,
+        rights: 0,
+        attr: 0,
+    });
+    bootstrap_invocations.push(map_invocation);
+
+    // 3. Now we can start setting up the system based on the information
+    // the user provided in the system xml.
+    //
+    // Create all the objects:
+    //
+    //  TCBs: one per PD
+    //  Endpoints: one per PD with a PP + one for the monitor
+    //  Notification: one per PD
+    //  VSpaces: one per PD
+    //  CNodes: one per PD
+    //  Small Pages:
+    //     one per pd for IPC buffer
+    //     as needed by MRs
+    //  Large Pages:
+    //     as needed by MRs
+    //  Page table structs:
+    //     as needed by protection domains based on mappings required
+    let mut phys_addr_next = reserved_base + invocation_table_size;
+    // Now we create additional MRs (and mappings) for the ELF files.
+    let mut regions = Vec::new();
+    let mut extra_mrs = Vec::new();
+    let mut pd_extra_maps: HashMap<&ProtectionDomain, SysMap> = HashMap::new();
+    for pd in &system.protection_domains {
+        let mut seg_idx = 0;
+        for segment in &pd_elf_files[pd].segments {
+            if !segment.loadable {
+                continue;
+            }
+
+            let segment_phys_addr = phys_addr_next + (segment.virt_addr % kernel_config.minimum_page_size);
+            regions.push(Region {
+                name: format!("PD-ELF {}-{}", pd.name, seg_idx),
+                addr: segment_phys_addr,
+                data: &segment.data,
+            });
+
+            let mut perms = 0;
+            if segment.is_readable() {
+                perms |= SysMapPerms::Read as u8;
+            }
+            if segment.is_writable() {
+                perms |= SysMapPerms::Write as u8;
+            }
+            if segment.is_executable() {
+                perms |= SysMapPerms::Execute as u8;
+            }
+
+            let base_vaddr = util::round_down(segment.virt_addr, kernel_config.minimum_page_size);
+            let end_vaddr = util::round_up(segment.virt_addr + segment.mem_size(), kernel_config.minimum_page_size);
+            let aligned_size = end_vaddr - base_vaddr;
+            let name = format!("ELF:{}-{}", pd.name, seg_idx);
+            let mr = SysMemoryRegion{
+                name: name,
+                size: aligned_size,
+                page_size: 0x1000,
+                page_count: aligned_size / 0x1000,
+                phys_addr: Some(phys_addr_next)
+            };
+            seg_idx += 1;
+            phys_addr_next += aligned_size;
+
+            let mp = SysMap {
+                mr: mr.name.clone(),
+                vaddr: base_vaddr,
+                perms: perms,
+                cached: true,
+            };
+            pd_extra_maps.insert(pd, mp);
+
+            // Add to extra_mrs at the end to avoid movement issues with the MR since it's used in
+            // constructing the SysMap struct
+            extra_mrs.push(mr);
+        }
+    }
 
     BuiltSystem {}
 }

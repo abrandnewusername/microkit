@@ -1,4 +1,5 @@
 
+#[repr(u64)]
 pub enum Object {
     Untyped = 0,
     Tcb = 1,
@@ -14,8 +15,19 @@ pub enum Object {
     PageTable = 11,
 }
 
+pub const OBJECT_SIZE_TCB: u64 = 1 << 11;
+pub const OBJECT_SIZE_ENDPOINT: u64 = 1 << 4;
+pub const OBJECT_SIZE_NOTIFICATION: u64 = 1 << 6;
+pub const OBJECT_SIZE_REPLY: u64 = 1 << 5;
+pub const OBJECT_SIZE_PAGE_TABLE: u64 = 1 << 12;
+pub const OBJECT_SIZE_LARGE_PAGE: u64 = 2 * 1024 * 1024;
+pub const OBJECT_SIZE_SMALL_PAGE: u64 = 4 * 1024;
+pub const OBJECT_SIZE_VSPACE: u64 = 4 * 1024;
+pub const OBJECT_SIZE_ASID_POOL: u64 = 1 << 12;
+
 pub enum Rights {
-    All = 0xf
+    Read = 0x2,
+    All = 0xf,
 }
 
 enum InvocationLabel {
@@ -99,6 +111,9 @@ impl Invocation {
             _ => panic!("fuck")
         };
     }
+
+    pub fn repeat(&mut self, count: u64, repeat: Invocation) {
+    }
 }
 
 pub enum Invocation {
@@ -163,6 +178,13 @@ pub enum Invocation {
         page_table: u64,
         vspace: u64,
         vaddr: u64,
+        attr: u64,
+    },
+    PageMap {
+        page: u64,
+        vspace: u64,
+        vaddr: u64,
+        rights: u64,
         attr: u64,
     },
     CnodeMint {

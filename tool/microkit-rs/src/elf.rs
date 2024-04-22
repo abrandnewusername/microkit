@@ -95,14 +95,33 @@ pub struct ElfSegment {
     pub data: Vec<u8>,
     pub phys_addr: u64,
     pub virt_addr: u64,
-    loadable: bool,
+    pub loadable: bool,
     attrs: u32,
 }
 
+impl ElfSegment {
+    pub fn mem_size(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    pub fn is_writable(&self) -> bool {
+        (self.attrs & ElfSegmentAttributes::Write as u32) != 0
+    }
+
+    pub fn is_readable(&self) -> bool {
+        (self.attrs & ElfSegmentAttributes::Read as u32) != 0
+    }
+
+    pub fn is_executable(&self) -> bool {
+        (self.attrs & ElfSegmentAttributes::Execute as u32) != 0
+    }
+}
+
 enum ElfSegmentAttributes {
-    PF_X = 0x1,
-    PF_W = 0x2,
-    PF_R = 0x4
+    // TODO: check what the PF_ in PF_X etc meant
+    Execute = 0x1,
+    Write = 0x2,
+    Read = 0x4,
 }
 
 pub struct ElfFile {

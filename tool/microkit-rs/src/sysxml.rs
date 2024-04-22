@@ -22,12 +22,28 @@ struct XmlSystemDescription {
     pub protection_domain: Vec<XmlProtectionDomain>,
 }
 
+#[repr(u8)]
+pub enum SysMapPerms {
+    Read,
+    Write,
+    Execute
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysMap {
-    mr: String,
-    vaddr: u64,
-    perms: String,
-    cached: bool,
+    pub mr: String,
+    pub vaddr: u64,
+    pub perms: u8,
+    pub cached: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SysMemoryRegion {
+    pub name: String,
+    pub size: u64,
+    pub page_size: u64,
+    pub page_count: u64,
+    pub phys_addr: Option<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -87,14 +103,18 @@ impl ProtectionDomain {
 }
 
 pub struct SystemDescription {
-    pub protection_domains: Vec<ProtectionDomain>
+    pub protection_domains: Vec<ProtectionDomain>,
+    pub memory_regions: Vec<SysMemoryRegion>,
 }
 
 impl SystemDescription {
     fn from_xml(xml: &XmlSystemDescription) -> SystemDescription {
         let pds = xml.protection_domain.iter().map(|pd| ProtectionDomain::from_xml(&pd)).collect();
+        // TODO: sort out mrs
+        let mrs = Vec::new();
         SystemDescription {
             protection_domains: pds,
+            memory_regions: mrs,
         }
     }
 }
