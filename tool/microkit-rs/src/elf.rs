@@ -204,6 +204,7 @@ impl ElfFile {
             let shent_end = shent_start + hdr.shentsize as u64;
             let shent_bytes = &bytes[shent_start as usize..shent_end as usize];
             let (shent_head, shent_body, _shent_tail) = unsafe { shent_bytes.align_to::<ElfSectionHeader64>() };
+            assert!(shent_head.is_empty(), "shent data was not aligned");
             let shent = &shent_body[0];
             match shent.type_ {
                 2 => symtab_shent = Some(shent),
@@ -239,6 +240,7 @@ impl ElfFile {
         while offset < symtab.len() {
             let sym_bytes = &symtab[offset..offset + symbol_size];
             let (sym_head, sym_body, _sym_tail) = unsafe { sym_bytes.align_to::<ElfSymbol64>() };
+            assert!(sym_head.is_empty(), "symbol data was not aligned");
             let sym = sym_body[0];
             let name = Self::get_string(symtab_str, sym.name as usize);
             symbols.push((name.to_string(), sym));

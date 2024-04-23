@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use quick_xml::de::Deserializer;
 use serde::{Deserialize};
+use crate::sel4::PageSize;
 
 #[derive(Deserialize, Debug, PartialEq)]
 struct XmlProgramImage {
@@ -37,11 +38,11 @@ pub struct SysMap {
     pub cached: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct SysMemoryRegion {
     pub name: String,
     pub size: u64,
-    pub page_size: u64,
+    pub page_size: PageSize,
     pub page_count: u64,
     pub phys_addr: Option<u64>,
 }

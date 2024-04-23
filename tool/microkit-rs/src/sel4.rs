@@ -1,6 +1,6 @@
-
 #[repr(u64)]
-pub enum Object {
+#[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
+pub enum ObjectType {
     Untyped = 0,
     Tcb = 1,
     Endpoint = 2,
@@ -15,6 +15,39 @@ pub enum Object {
     PageTable = 11,
 }
 
+impl ObjectType {
+    pub fn fixed_size(&self) -> Option<u64> {
+        match self {
+            ObjectType::Tcb => Some(OBJECT_SIZE_TCB),
+            ObjectType::Endpoint => Some(OBJECT_SIZE_ENDPOINT),
+            ObjectType::Notification => Some(OBJECT_SIZE_NOTIFICATION),
+            ObjectType::Reply => Some(OBJECT_SIZE_REPLY),
+            ObjectType::VSpace => Some(OBJECT_SIZE_VSPACE),
+            ObjectType::PageTable => Some(OBJECT_SIZE_PAGE_TABLE),
+            ObjectType::LargePage => Some(OBJECT_SIZE_LARGE_PAGE),
+            ObjectType::SmallPage => Some(OBJECT_SIZE_SMALL_PAGE),
+            _ => None
+        }
+    }
+}
+
+#[repr(u64)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
+pub enum PageSize {
+    Small = 0x1000,
+    Large = 0x200_000,
+}
+
+impl From<u64> for PageSize {
+    fn from(item: u64) -> PageSize {
+        match item {
+            0x1000 => PageSize::Small,
+            0x200_000 => PageSize::Large,
+            _ => panic!("Unknown page size {:x}", item),
+        }
+    }
+}
+
 pub const OBJECT_SIZE_TCB: u64 = 1 << 11;
 pub const OBJECT_SIZE_ENDPOINT: u64 = 1 << 4;
 pub const OBJECT_SIZE_NOTIFICATION: u64 = 1 << 6;
@@ -23,9 +56,10 @@ pub const OBJECT_SIZE_PAGE_TABLE: u64 = 1 << 12;
 pub const OBJECT_SIZE_LARGE_PAGE: u64 = 2 * 1024 * 1024;
 pub const OBJECT_SIZE_SMALL_PAGE: u64 = 4 * 1024;
 pub const OBJECT_SIZE_VSPACE: u64 = 4 * 1024;
-pub const OBJECT_SIZE_ASID_POOL: u64 = 1 << 12;
+// pub const OBJECT_SIZE_ASID_POOL: u64 = 1 << 12;
 
 pub enum Rights {
+    None = 0x0,
     Read = 0x2,
     All = 0xf,
 }
@@ -34,21 +68,21 @@ enum InvocationLabel {
     // Untyped
     UntypedRetype = 1,
     // TCB
-    TCBReadRegisters = 2,
-    TCBWriteRegisters = 3,
-    TCBCopyRegisters = 4,
-    TCBConfigure = 5,
-    TCBSetPriority = 6,
-    TCBSetMCPriority = 7,
-    TCBSetSchedParams = 8,
-    TCBSetTimeoutEndpoint = 9,
-    TCBSetIPCBuffer = 10,
-    TCBSetSpace = 11,
-    TCBSuspend = 12,
-    TCBResume = 13,
-    TCBBindNotification = 14,
-    TCBUnbindNotification = 15,
-    TCBSetTLSBase = 16,
+    TcbReadRegisters = 2,
+    TcbWriteRegisters = 3,
+    TcbCopyRegisters = 4,
+    TcbConfigure = 5,
+    TcbSetPriority = 6,
+    TcbSetMCPriority = 7,
+    TcbSetSchedParams = 8,
+    TcbSetTimeoutEndpoint = 9,
+    TcbSetIPcbuffer = 10,
+    TcbSetSpace = 11,
+    TcbSuspend = 12,
+    TcbResume = 13,
+    TcbBindNotification = 14,
+    TcbUnbindNotification = 15,
+    TcbSetTLSBase = 16,
     // CNode
     CNodeRevoke = 17,
     CNodeDelete = 18,
@@ -59,10 +93,10 @@ enum InvocationLabel {
     CNodeMutate = 23,
     CNodeRotate = 24,
     // IRQ
-    IRQIssueIRQHandler = 25,
-    IRQAckIRQ = 26,
-    IRQSetIRQHandler = 27,
-    IRQClearIRQHandler = 28,
+    IrqIssueIrqHandler = 25,
+    IrqAckIrq = 26,
+    IrqSetIrqHandler = 27,
+    IrqClearIrqHandler = 28,
     // Domain
     DomainSetSet = 29,
     // Sched
@@ -73,53 +107,54 @@ enum InvocationLabel {
     SchedContextConsume = 34,
     SchedContextYieldTo = 35,
     // ARM V Space
-    ARMVSpaceClean_Data = 36,
-    ARMVSpaceInvalidate_Data = 37,
-    ARMVSpaceCleanInvalidate_Data = 38,
-    ARMVSpaceUnify_Instruction = 39,
+    ArmVspaceCleanData = 36,
+    ArmVspaceInvalidateData = 37,
+    ArmVspaceCleanInvalidateData = 38,
+    ArmVspaceUnifyInstruction = 39,
     // ARM SMC
-    ARMSMCCall = 40,
+    ArmSmcCall = 40,
     // ARM Page table
-    ARMPageTableMap = 41,
-    ARMPageTableUnmap = 42,
+    ArmPageTableMap = 41,
+    ArmPageTableUnmap = 42,
     // ARM Page
-    ARMPageMap = 43,
-    ARMPageUnmap = 44,
-    ARMPageClean_Data = 45,
-    ARMPageInvalidate_Data = 46,
-    ARMPageCleanInvalidate_Data = 47,
-    ARMPageUnify_Instruction = 48,
-    ARMPageGetAddress = 49,
+    ArmPageMap = 43,
+    ArmPageUnmap = 44,
+    ArmPageCleanData = 45,
+    ArmPageInvalidateData = 46,
+    ArmPageCleanInvalidateData = 47,
+    ArmPageUnifyInstruction = 48,
+    ArmPageGetAddress = 49,
     // ARM Asid
-    ARMASIDControlMakePool = 50,
-    ARMASIDPoolAssign = 51,
+    ArmAsidControlMakePool = 50,
+    ArmAsidPoolAssign = 51,
     // ARM IRQ
-    ARMIRQIssueIRQHandlerTrigger = 52,
+    ArmIrqIssueIrqHandlerTrigger = 52,
 }
 
-struct Aarch64Regs {
+pub struct Aarch64Regs {
     pc: u64,
 }
 
 impl Invocation {
-    pub fn generic(&self) {
-        let (label, bytes, extra_caps) = match self {
+    pub fn generic(self) {
+        let (_, _, _): (InvocationLabel, &[u64], &[u64]) = match self {
             Invocation::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } =>
-                                          (InvocationLabel::UntypedRetype, [untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects], [root]),
+                                          (InvocationLabel::UntypedRetype, &[untyped, object_type as u64, size_bits, root, node_index, node_depth, node_offset, num_objects], &[root]),
             Invocation::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
-                                          (InvocationLabel::UntypedRetype, [cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge], [src_root]),
+                                          (InvocationLabel::UntypedRetype, &[cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights as u64, badge], &[src_root]),
             _ => panic!("fuck")
         };
     }
 
-    pub fn repeat(&mut self, count: u64, repeat: Invocation) {
+    pub fn repeat(&mut self, _count: u64, _repeat: Invocation) {
     }
 }
 
+#[allow(dead_code)]
 pub enum Invocation {
     UntypedRetype {
         untyped: u64,
-        object_type: u64,
+        object_type: ObjectType,
         size_bits: u64,
         root: u64,
         node_index: u64,
@@ -184,7 +219,7 @@ pub enum Invocation {
         page: u64,
         vspace: u64,
         vaddr: u64,
-        rights: u64,
+        rights: Rights,
         attr: u64,
     },
     CnodeMint {
@@ -194,7 +229,7 @@ pub enum Invocation {
         src_root: u64,
         src_obj: u64,
         src_depth: u64,
-        rights: u64,
+        rights: Rights,
         badge: u64,
     },
     CnodeCopy {
@@ -204,7 +239,7 @@ pub enum Invocation {
         src_root: u64,
         src_obj: u64,
         src_depth: u64,
-        rights: u64,
+        rights: Rights,
     },
     CnodeMutate {
         cnode: u64,

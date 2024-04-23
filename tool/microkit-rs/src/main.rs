@@ -8,27 +8,27 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
 use elf::ElfFile;
-use sel4::{Invocation, Object, Rights};
+use sel4::{Invocation, ObjectType, Rights, PageSize};
 
 // TODO: use a better typed thing?
-const SEL4_ARM_PAGE_CACHEABLE: u64 = 1;
-const SEL4_ARM_PARITY_ENABLED: u64 = 2;
+// const SEL4_ARM_PAGE_CACHEABLE: u64 = 1;
+// const SEL4_ARM_PARITY_ENABLED: u64 = 2;
 const SEL4_ARM_EXECUTE_NEVER: u64 = 4;
 const SEL4_ARM_DEFAULT_VMATTRIBUTES: u64 = 3;
 
-const INPUT_CAP_IDX: usize = 1;
-const FAULT_EP_CAP_IDX: usize = 2;
-const VSPACE_CAP_IDX: usize = 3;
-const REPLY_CAP_IDX: usize = 4;
-const MONITOR_EP_CAP_IDX: usize = 5;
-const BASE_OUTPUT_NOTIFICATION_CAP: usize = 10;
-const BASE_OUTPUT_ENDPOINT_CAP: usize = BASE_OUTPUT_NOTIFICATION_CAP + 64;
-const BASE_IRQ_CAP: usize = BASE_OUTPUT_ENDPOINT_CAP + 64;
+// const INPUT_CAP_IDX: usize = 1;
+// const FAULT_EP_CAP_IDX: usize = 2;
+// const VSPACE_CAP_IDX: usize = 3;
+// const REPLY_CAP_IDX: usize = 4;
+// const MONITOR_EP_CAP_IDX: usize = 5;
+// const BASE_OUTPUT_NOTIFICATION_CAP: usize = 10;
+// const BASE_OUTPUT_ENDPOINT_CAP: usize = BASE_OUTPUT_NOTIFICATION_CAP + 64;
+// const BASE_IRQ_CAP: usize = BASE_OUTPUT_ENDPOINT_CAP + 64;
 const MAX_SYSTEM_INVOCATION_SIZE: u64 = util::mb(128) as u64;
-const PD_CAPTABLE_BITS: usize = 12;
-const PD_CAP_SIZE: usize = 256;
-const PD_CAP_BITS: usize = PD_CAP_SIZE.ilog2() as usize;
-const PD_SCHEDCONTEXT_SIZE: usize = 1 << 8;
+// const PD_CAPTABLE_BITS: usize = 12;
+// const PD_CAP_SIZE: usize = 256;
+// const PD_CAP_BITS: usize = PD_CAP_SIZE.ilog2() as usize;
+// const PD_SCHEDCONTEXT_SIZE: usize = 1 << 8;
 
 const SLOT_BITS: u64 = 5;
 const SLOT_SIZE: u64 = 1 << SLOT_BITS;
@@ -38,16 +38,282 @@ const INIT_TCB_CAP_ADDRESS: u64 = 1;
 const INIT_CNODE_CAP_ADDRESS: u64 = 2;
 const INIT_VSPACE_CAP_ADDRESS: u64 = 3;
 const IRQ_CONTROL_CAP_ADDRESS: u64 = 4; // Singleton
-const ASID_CONTROL_CAP_ADDRESS: u64 = 5; // Singleton
+// const ASID_CONTROL_CAP_ADDRESS: u64 = 5; // Singleton
 const INIT_ASID_POOL_CAP_ADDRESS: u64 = 6;
-const IO_PORT_CONTROL_CAP_ADDRESS: u64 = 7; // Null on this platform
-const IO_SPACE_CAP_ADDRESS: u64 = 8;  // Null on this platform
-const BOOT_INFO_FRAME_CAP_ADDRESS: u64 = 9;
-const INIT_THREAD_IPC_BUFFER_CAP_ADDRESS: u64 = 10;
-const DOMAIN_CAP_ADDRESS: u64 = 11;
-const SMMU_SID_CONTROL_CAP_ADDRESS: u64 = 12;
-const SMMU_CB_CONTROL_CAP_ADDRESS: u64 = 13;
-const INIT_THREAD_SC_CAP_ADDRESS: u64 = 14;
+// const IO_PORT_CONTROL_CAP_ADDRESS: u64 = 7; // Null on this platform
+// const IO_SPACE_CAP_ADDRESS: u64 = 8;  // Null on this platform
+// const BOOT_INFO_FRAME_CAP_ADDRESS: u64 = 9;
+// const INIT_THREAD_IPC_BUFFER_CAP_ADDRESS: u64 = 10;
+// const DOMAIN_CAP_ADDRESS: u64 = 11;
+// const SMMU_SID_CONTROL_CAP_ADDRESS: u64 = 12;
+// const SMMU_CB_CONTROL_CAP_ADDRESS: u64 = 13;
+// const INIT_THREAD_SC_CAP_ADDRESS: u64 = 14;
+
+/// Represents an allocated kernel object.
+///
+/// Kernel objects can have multiple caps (and caps can have multiple addresses).
+/// The cap referred to here is the original cap that is allocated when the
+/// kernel object is first allocate.
+/// The cap_slot refers to the specific slot in which this cap resides.
+/// The cap_address refers to a cap address that addresses this cap.
+/// The cap_address is is intended to be valid within the context of the
+/// initial task.
+#[derive(Copy, Clone)]
+struct KernelObject<'a> {
+    name: &'a str,
+    /// Type of kernel object
+    object_type: ObjectType,
+    cap_slot: u64,
+    cap_addr: u64,
+    /// Physical memory address of the kernel object
+    phys_addr: u64,
+}
+
+#[derive(Debug)]
+struct FixedUntypedAlloc {
+    ut: UntypedObject,
+    watermark: u64,
+}
+
+impl FixedUntypedAlloc {
+    pub fn new(ut: UntypedObject) -> FixedUntypedAlloc {
+        FixedUntypedAlloc { ut, watermark: ut.base() }
+    }
+
+    pub fn contains(&self, addr: u64) -> bool {
+        self.ut.base() <= addr && addr < self.ut.end()
+    }
+}
+
+struct InitSystem<'a> {
+    kernel_config: &'a KernelConfig,
+    cnode_cap: u64,
+    cnode_mask: u64,
+    kao: &'a mut KernelObjectAllocator,
+    invocations: &'a mut Vec<Invocation>,
+    cap_slot: u64,
+    last_fixed_address: u64,
+    device_untyped: Vec<FixedUntypedAlloc>,
+    cap_address_names: &'a mut HashMap<u64, &'a str>,
+    objects: Vec<KernelObject<'a>>,
+}
+
+impl<'a> InitSystem<'a> {
+    pub fn new(kernel_config: &'a KernelConfig,
+               cnode_cap: u64,
+               cnode_mask: u64,
+               first_available_cap_slot: u64,
+               kernel_object_allocator: &'a mut KernelObjectAllocator,
+               kernel_boot_info: &'a KernelBootInfo,
+               invocations: &'a mut Vec<Invocation>,
+               cap_address_names: &'a mut HashMap<u64, &'a str>,
+               ) -> InitSystem<'a> {
+        let mut device_untyped: Vec<FixedUntypedAlloc> = kernel_boot_info.untyped_objects
+                            .iter()
+                            .filter_map(|ut| {
+                                if ut.is_device {
+                                    Some(FixedUntypedAlloc::new(*ut))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+        device_untyped.sort_by(|a, b| {
+            if a.ut.base() < b.ut.base() {
+                std::cmp::Ordering::Less
+            } else if a.ut.base() == b.ut.base() {
+                std::cmp::Ordering::Equal
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        });
+
+        InitSystem {
+            kernel_config: kernel_config,
+            cnode_cap: cnode_cap,
+            cnode_mask: cnode_mask,
+            kao: kernel_object_allocator,
+            invocations: invocations,
+            cap_slot: first_available_cap_slot,
+            last_fixed_address: 0,
+            device_untyped: device_untyped,
+            cap_address_names: cap_address_names,
+            objects: Vec::new(),
+        }
+    }
+
+    pub fn reserve(&mut self, allocations: Vec<(&UntypedObject, u64)>) {
+        for (alloc_ut, alloc_phys_addr) in allocations {
+            for fut in &mut self.device_untyped {
+                if *alloc_ut == fut.ut {
+                    if fut.ut.base() <= alloc_phys_addr && alloc_phys_addr <= fut.ut.end() {
+                        fut.watermark = alloc_phys_addr;
+                        return;
+                    } else {
+                        // TODO: use display trait instead
+                        panic!("Allocation {:?} ({:x}) not in untyped region {:?}", alloc_ut, alloc_phys_addr, fut.ut.region);
+                    }
+                }
+            }
+
+            // TODO: use display trait instead
+            panic!("Allocation {:?} ({:x}) not in any device untyped", alloc_ut, alloc_phys_addr);
+        }
+    }
+
+    /// Note: Fixed objects must be allocated in order!
+    pub fn allocate_fixed_objects(&mut self, phys_address: u64, object_type: ObjectType, count: u64, names: Vec<&'a str>) -> Vec<KernelObject> {
+        assert!(phys_address >= self.last_fixed_address);
+        assert!(object_type.fixed_size().is_some());
+        assert!(count == names.len() as u64);
+
+        let alloc_size = object_type.fixed_size().unwrap();
+        // Find an untyped that contains the given address
+        let fut: &mut FixedUntypedAlloc = self.device_untyped
+                    .iter_mut()
+                    .find(|fut| fut.contains(phys_address))
+                    .expect(format!("physical address {:x} not in any device untyped", phys_address).as_str());
+
+        if phys_address < fut.watermark {
+            panic!("physical address {:x} is below watermark", phys_address);
+        }
+
+        if fut.watermark != phys_address {
+            // If the watermark isn't at the right spot, then we need to
+            // create padding objects until it is.
+            let mut padding_required = phys_address - fut.watermark;
+            // We are restricted in how much we can pad:
+            // 1: Untyped objects must be power-of-two sized.
+            // 2: Untyped objects must be aligned to their size.
+            let mut padding_sizes = Vec::new();
+            // We have two potential approaches for how we pad.
+            // 1: Use largest objects possible respecting alignment
+            // and size restrictions.
+            // 2: Use a fixed size object multiple times. This will
+            // create more objects, but as same sized objects can be
+            // create in a batch, required fewer invocations.
+            // For now we choose #1
+            let mut wm = fut.watermark;
+            while padding_required > 0 {
+                let wm_lsb = util::lsb(wm);
+                let sz_msb = util::msb(padding_required);
+                let pad_obejct_size = 1 << std::cmp::min(wm_lsb, sz_msb);
+                padding_sizes.push(pad_obejct_size);
+                wm += pad_obejct_size;
+                padding_required -= pad_obejct_size;
+            }
+
+            for sz in padding_sizes {
+                self.invocations.push(Invocation::UntypedRetype{
+                    untyped: fut.ut.cap,
+                    object_type: ObjectType::Untyped,
+                    size_bits: sz.ilog2() as u64,
+                    root: self.cnode_cap,
+                    node_index: 1,
+                    node_depth: 1,
+                    node_offset: self.cap_slot,
+                    num_objects: 1,
+                });
+                self.cap_slot += 1;
+            }
+        }
+
+        let object_cap = self.cap_slot;
+        self.cap_slot += 1;
+        self.invocations.push(Invocation::UntypedRetype{
+            untyped: fut.ut.cap,
+            object_type: object_type,
+            size_bits: 0,
+            root: self.cnode_cap,
+            node_index: 1,
+            node_depth: 1,
+            node_offset: object_cap,
+            num_objects: 1,
+        });
+
+        fut.watermark = phys_address + alloc_size;
+        self.last_fixed_address = phys_address + alloc_size;
+        let cap_addr = self.cnode_mask | object_cap;
+        self.cap_address_names.insert(cap_addr, names[0]);
+
+        let kernel_object = KernelObject{
+            name: names[0],
+            object_type,
+            cap_slot: object_cap,
+            cap_addr,
+            phys_addr: phys_address,
+        };
+        self.objects.push(kernel_object.clone());
+
+        vec![kernel_object]
+    }
+
+    pub fn allocate_objects(&mut self, object_type: ObjectType, names: Vec<&'a str>, size: Option<u64>) -> Vec<KernelObject> {
+        let count = names.len() as u64;
+
+        let alloc_size;
+        let api_size: u64;
+        if let Some(object_size) = object_type.fixed_size() {
+            // An object with a fixed size should not be allocated with a given size
+            assert!(size.is_none());
+            alloc_size = object_size;
+            api_size = 0;
+        } else if object_type == ObjectType::CNode || object_type == ObjectType::SchedContext {
+            assert!(size.is_some());
+            // TODO: so many unwraps...
+            assert!(util::is_power_of_two(size.unwrap()));
+            api_size = size.unwrap().ilog2() as u64;
+            alloc_size = size.unwrap() * SLOT_SIZE;
+        } else {
+            panic!("Invalid object type: {:?}", object_type);
+        }
+
+        let allocation = self.kao.alloc_n(alloc_size, count);
+        let base_cap_slot = self.cap_slot;
+        self.cap_slot += count;
+
+        let mut to_alloc = count;
+        let mut alloc_cap_slot = base_cap_slot;
+        while to_alloc > 0 {
+            let call_count = std::cmp::min(to_alloc, self.kernel_config.fan_out_limit);
+            self.invocations.push(Invocation::UntypedRetype{
+                untyped: allocation.untyped_cap_address,
+                object_type: object_type,
+                size_bits: api_size,
+                root: self.cnode_cap,
+                node_index: 1,
+                node_depth: 1,
+                node_offset: alloc_cap_slot,
+                num_objects: call_count,
+            });
+            to_alloc -= call_count;
+            alloc_cap_slot += call_count;
+        }
+
+        let mut kernel_objects = Vec::new();
+        let mut phys_addr = allocation.phys_addr;
+        for idx in 0..count {
+            let cap_slot = base_cap_slot + idx;
+            let cap_addr = self.cnode_mask | cap_slot;
+            let name = names[idx as usize];
+            self.cap_address_names.insert(cap_addr, name);
+            kernel_objects.push(KernelObject{
+                name,
+                object_type,
+                cap_slot,
+                cap_addr,
+                phys_addr,
+            });
+
+            phys_addr += alloc_size;
+        }
+
+        // TODO: can we remove this clone?
+        self.objects.extend(kernel_objects.clone());
+
+        kernel_objects
+    }
+}
 
 struct Region<'a> {
     name: String,
@@ -55,7 +321,7 @@ struct Region<'a> {
     data: &'a Vec<u8>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct MemoryRegion {
     /// Note: base is inclusive, end is exclusive
     /// MemoryRegion(1, 5) would have a size of 4
@@ -75,16 +341,14 @@ impl MemoryRegion {
 
     pub fn aligned_power_of_two_regions(&self) -> Vec<MemoryRegion> {
         let max_bits = 47;
-        assert!(false, "fixup lsb and msb");
         // TODO: comment seems weird?
         // Align
         // find the first bit self
         let mut regions = Vec::new();
         let mut base = self.base;
-        let mut end = self.end;
         let mut bits;
-        while base != end {
-            let size = end - base;
+        while base != self.end {
+            let size = self.end - base;
             let size_bits = util::msb(size);
             if base == 0 {
                 bits = size_bits;
@@ -517,7 +781,7 @@ fn emulate_kernel_boot_partial(kernel_config: &KernelConfig, kernel_elf: &ElfFil
     partial_info.normal_memory
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct UntypedObject {
     cap: u64,
     region: MemoryRegion,
@@ -531,6 +795,10 @@ impl UntypedObject {
 
     pub fn base(&self) -> u64 {
         self.region.base
+    }
+
+    pub fn end(&self) -> u64 {
+        self.region.end
     }
 
     pub fn size_bits(&self) -> u64 {
@@ -612,13 +880,13 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
     normal_memory.remove_region(initial_task_phys_region.base, initial_task_phys_region.end);
     normal_memory.remove_region(reserved_region.base, reserved_region.end);
 
-    /// Now, the tricky part! determine which memory is used for the initial task objects
+    // Now, the tricky part! determine which memory is used for the initial task objects
     let initial_objects_size = calculate_rootserver_size(initial_task_virt_region);
     let initial_objects_align = rootserver_max_size_bits();
 
-    /// Find an appropriate region of normal memory to allocate the objects
-    /// from; this follows the same algorithm used within the kernel boot code
-    /// (or at least we hope it does!)
+    // Find an appropriate region of normal memory to allocate the objects
+    // from; this follows the same algorithm used within the kernel boot code
+    // (or at least we hope it does!)
     // TOOD: this loop could be done better in a functional way?
     let mut region_to_remove: Option<u64> = None;
     for region in normal_memory.regions.iter().rev() {
@@ -644,13 +912,14 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
     let device_regions: Vec<MemoryRegion> = [reserved_region.aligned_power_of_two_regions().as_slice(), device_memory.aligned_power_of_two_regions().as_slice()].concat();
     let normal_regions: Vec<MemoryRegion> = [boot_region.aligned_power_of_two_regions().as_slice(), normal_memory.aligned_power_of_two_regions().as_slice()].concat();
     let mut untyped_objects = Vec::new();
-    for (cap, r) in device_regions[first_untyped_cap as usize..].into_iter().enumerate() {
-        untyped_objects.push(UntypedObject::new(cap as u64, *r, true));
+    for (i, r) in device_regions.iter().enumerate() {
+        let cap = i as u64 + first_untyped_cap;
+        untyped_objects.push(UntypedObject::new(cap, *r, true));
     }
-    // TODO: check logic
-    let normal_cap_start = device_regions.len() + 1;
-    for (cap, r) in normal_regions[normal_cap_start..].into_iter().enumerate() {
-        untyped_objects.push(UntypedObject::new(cap as u64, *r, false));
+    let normal_regions_start_cap = first_untyped_cap + device_regions.len() as u64 + 1;
+    for (i, r) in normal_regions.iter().enumerate() {
+        let cap = i as u64 + normal_regions_start_cap;
+        untyped_objects.push(UntypedObject::new(cap, *r, false));
     }
 
     let first_available_cap = first_untyped_cap + device_regions.len() as u64 + normal_regions.len() as u64;
@@ -722,9 +991,9 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
     let reserved_region = MemoryRegion::new(reserved_base, reserved_base + reserved_size);
 
-    /// Now that the reserved region has been allocated we can determine the specific
-    /// region of physical memory required for the inovcation table itself, and
-    /// all the ELF segments
+    // Now that the reserved region has been allocated we can determine the specific
+    // region of physical memory required for the inovcation table itself, and
+    // all the ELF segments
     let invocation_table_region = MemoryRegion::new(reserved_base, reserved_base + invocation_table_size);
 
     // let mut phys_addr_next = invocation_table_region.end;
@@ -814,7 +1083,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
     bootstrap_invocations.push(Invocation::UntypedRetype{
         untyped: root_cnode_allocation.untyped_cap_address,
-        object_type: Object::CNode as u64,
+        object_type: ObjectType::CNode,
         size_bits: root_cnode_bits,
         root: INIT_CNODE_CAP_ADDRESS,
         node_index: 0,
@@ -838,7 +1107,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         src_root: INIT_CNODE_CAP_ADDRESS,
         src_obj: INIT_CNODE_CAP_ADDRESS,
         src_depth: kernel_config.cap_address_bits,
-        rights: Rights::All as u64,
+        rights: Rights::All,
         badge: guard,
     });
 
@@ -859,7 +1128,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // a temporary cap slot in the initial CNode to start with.
     bootstrap_invocations.push(Invocation::UntypedRetype{
         untyped: system_cnode_allocation.untyped_cap_address,
-        object_type: Object::CNode as u64,
+        object_type: ObjectType::CNode,
         size_bits: system_cnode_bits,
         root: INIT_CNODE_CAP_ADDRESS,
         node_index: 0,
@@ -881,7 +1150,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         src_root: INIT_CNODE_CAP_ADDRESS,
         src_obj: system_cnode_cap,
         src_depth: kernel_config.cap_address_bits,
-        rights: Rights::All as u64,
+        rights: Rights::All,
         badge: system_guard
     });
 
@@ -916,14 +1185,14 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let mut cap_slot = base_page_cap;
     let mut phys_addr = invocation_table_region.base;
 
-    let boot_info_device_untypeds: Vec<UntypedObject> = kernel_boot_info.untyped_objects.into_iter().filter(|o| o.is_device).collect();
+    let boot_info_device_untypeds: Vec<&UntypedObject> = kernel_boot_info.untyped_objects.iter().filter(|o| o.is_device).collect();
     for ut in boot_info_device_untypeds {
         let ut_pages = ut.region.size() / kernel_config.minimum_page_size;
         let retype_page_count = std::cmp::min(ut_pages, remaining_pages);
         assert!(retype_page_count <= kernel_config.fan_out_limit);
         bootstrap_invocations.push(Invocation::UntypedRetype{
             untyped: ut.cap,
-            object_type: Object::SmallPage as u64,
+            object_type: ObjectType::SmallPage,
             size_bits: 0,
             root: root_cnode_cap,
             node_index: 1,
@@ -960,7 +1229,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     assert!(page_tables_required <= kernel_config.fan_out_limit);
     bootstrap_invocations.push(Invocation::UntypedRetype{
         untyped: page_table_allocation.untyped_cap_address,
-        object_type: Object::PageTable as u64,
+        object_type: ObjectType::PageTable,
         size_bits: 0,
         root: root_cnode_cap,
         node_index: 1,
@@ -981,7 +1250,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     pt_map_invocation.repeat(page_tables_required, Invocation::PageTableMap{
         page_table: 1,
         vspace: 0,
-        vaddr: Object::LargePage as u64,
+        vaddr: ObjectType::LargePage as u64,
         attr: 0,
     });
     bootstrap_invocations.push(pt_map_invocation);
@@ -991,14 +1260,15 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         page: system_cap_address_mask | base_page_cap,
         vspace: INIT_VSPACE_CAP_ADDRESS,
         vaddr: vaddr,
-        rights: Rights::Read as u64,
+        rights: Rights::Read,
         attr: SEL4_ARM_DEFAULT_VMATTRIBUTES | SEL4_ARM_EXECUTE_NEVER
     };
     map_invocation.repeat(pages_required, Invocation::PageMap{
         page: 1,
         vspace: 0,
         vaddr: kernel_config.minimum_page_size,
-        rights: 0,
+        // TODO: kind of hacky because our abstraction for repeating invocations is hacky
+        rights: Rights::None,
         attr: 0,
     });
     bootstrap_invocations.push(map_invocation);
@@ -1056,8 +1326,8 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
             let name = format!("ELF:{}-{}", pd.name, seg_idx);
             let mr = SysMemoryRegion{
                 name: name,
-                size: aligned_size,
-                page_size: 0x1000,
+                size: aligned_size.into(),
+                page_size: PageSize::Small,
                 page_count: aligned_size / 0x1000,
                 phys_addr: Some(phys_addr_next)
             };
@@ -1075,6 +1345,48 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
             // Add to extra_mrs at the end to avoid movement issues with the MR since it's used in
             // constructing the SysMap struct
             extra_mrs.push(mr);
+        }
+    }
+
+    // TODO: this is a large copy here
+    let all_mrs = [system.memory_regions, extra_mrs].concat();
+    let all_mr_by_name: HashMap<&str, &SysMemoryRegion> = all_mrs.iter().map(|mr| (mr.name.as_str(), mr)).collect();
+
+    let mut system_invocations: Vec<Invocation> = Vec::new();
+    let mut init_system = InitSystem::new(
+        &kernel_config,
+        root_cnode_cap,
+        system_cap_address_mask,
+        cap_slot,
+        &mut kao,
+        &kernel_boot_info,
+        &mut system_invocations,
+        &mut cap_address_names
+    );
+
+    init_system.reserve(invocation_table_allocations);
+
+    // 3.1 Work out how many regular (non-fixed) page objects are required
+    let mut small_page_names_by_size = Vec::new();
+    let mut large_page_names_by_size = Vec::new();
+
+    for pd in system.protection_domains {
+        let ipc_buffer_str = format!("Page({}): IPC Buffer PD={}", util::human_size_strict(PageSize::Small as u64), pd.name);
+        small_page_names_by_size.push(ipc_buffer_str);
+    }
+
+    for mr in all_mrs {
+        if mr.phys_addr.is_some() {
+            continue;
+        }
+
+        let page_size_human = util::human_size_strict(mr.page_size as u64);
+        for idx in 0..mr.page_count {
+            let page_str = format!("Page({}): MR={} #{}", page_size_human, mr.name, idx);
+            match mr.page_size as PageSize {
+                PageSize::Small => small_page_names_by_size.push(page_str),
+                PageSize::Large => large_page_names_by_size.push(page_str),
+            }
         }
     }
 
@@ -1104,13 +1416,13 @@ fn main() {
     // and do error checking.
     let kernel_elf = ElfFile::from_path(Path::new("testing/sel4.elf")).unwrap();
     let monitor_elf = ElfFile::from_path(Path::new("testing/monitor.elf")).unwrap();
-    let loader_elf = ElfFile::from_path(Path::new("testing/loader.elf")).unwrap();
+    // let loader_elf = ElfFile::from_path(Path::new("testing/loader.elf")).unwrap();
 
     let search_paths = vec!["testing"];
 
     // TODO: do not hardcode
-    let board = "qemu_virt_aarch64";
-    let config = "debug";
+    // let board = "qemu_virt_aarch64";
+    // let config = "debug";
 
     // 1. Parse the arguments
     // 2. Parse the XML description
