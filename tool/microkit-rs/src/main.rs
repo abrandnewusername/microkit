@@ -58,9 +58,9 @@ const INIT_ASID_POOL_CAP_ADDRESS: u64 = 6;
 /// The cap_address refers to a cap address that addresses this cap.
 /// The cap_address is is intended to be valid within the context of the
 /// initial task.
-#[derive(Copy, Clone)]
-struct KernelObject<'a> {
-    name: &'a str,
+#[derive(Clone)]
+struct KernelObject {
+    name: String,
     /// Type of kernel object
     object_type: ObjectType,
     cap_slot: u64,
@@ -95,7 +95,7 @@ struct InitSystem<'a> {
     last_fixed_address: u64,
     device_untyped: Vec<FixedUntypedAlloc>,
     cap_address_names: &'a mut HashMap<u64, &'a str>,
-    objects: Vec<KernelObject<'a>>,
+    objects: Vec<KernelObject>,
 }
 
 impl<'a> InitSystem<'a> {
@@ -162,7 +162,7 @@ impl<'a> InitSystem<'a> {
     }
 
     /// Note: Fixed objects must be allocated in order!
-    pub fn allocate_fixed_objects(&mut self, phys_address: u64, object_type: ObjectType, count: u64, names: Vec<&'a str>) -> Vec<KernelObject> {
+    pub fn allocate_fixed_objects(&mut self, phys_address: u64, object_type: ObjectType, count: u64, names: &'a Vec<String>) -> Vec<KernelObject> {
         assert!(phys_address >= self.last_fixed_address);
         assert!(object_type.fixed_size().is_some());
         assert!(count == names.len() as u64);
@@ -234,10 +234,11 @@ impl<'a> InitSystem<'a> {
         fut.watermark = phys_address + alloc_size;
         self.last_fixed_address = phys_address + alloc_size;
         let cap_addr = self.cnode_mask | object_cap;
-        self.cap_address_names.insert(cap_addr, names[0]);
+        self.cap_address_names.insert(cap_addr, &names[0]);
 
         let kernel_object = KernelObject{
-            name: names[0],
+            // TODO: not sure if we can get away with removing this clone
+            name: names[0].clone(),
             object_type,
             cap_slot: object_cap,
             cap_addr,
@@ -248,7 +249,7 @@ impl<'a> InitSystem<'a> {
         vec![kernel_object]
     }
 
-    pub fn allocate_objects(&mut self, object_type: ObjectType, names: Vec<&'a str>, size: Option<u64>) -> Vec<KernelObject> {
+    pub fn allocate_objects(&mut self, object_type: ObjectType, names: &'a Vec<String>, size: Option<u64>) -> Vec<KernelObject> {
         let count = names.len() as u64;
 
         let alloc_size;
@@ -295,10 +296,11 @@ impl<'a> InitSystem<'a> {
         for idx in 0..count {
             let cap_slot = base_cap_slot + idx;
             let cap_addr = self.cnode_mask | cap_slot;
-            let name = names[idx as usize];
-            self.cap_address_names.insert(cap_addr, name);
+            let name = &names[idx as usize];
+            self.cap_address_names.insert(cap_addr, &name);
             kernel_objects.push(KernelObject{
-                name,
+                // TODO: not sure if we can get away with removing this clone
+                name: name.clone(),
                 object_type,
                 cap_slot,
                 cap_addr,
@@ -1367,12 +1369,13 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     init_system.reserve(invocation_table_allocations);
 
     // 3.1 Work out how many regular (non-fixed) page objects are required
-    let mut small_page_names_by_size = Vec::new();
-    let mut large_page_names_by_size = Vec::new();
+    let mut small_page_names = Vec::new();
+    let mut large_page_names = Vec::new();
+    // let mut ipc_buffer_objects
 
     for pd in system.protection_domains {
         let ipc_buffer_str = format!("Page({}): IPC Buffer PD={}", util::human_size_strict(PageSize::Small as u64), pd.name);
-        small_page_names_by_size.push(ipc_buffer_str);
+        small_page_names.push(ipc_buffer_str);
     }
 
     for mr in all_mrs {
@@ -1384,11 +1387,20 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         for idx in 0..mr.page_count {
             let page_str = format!("Page({}): MR={} #{}", page_size_human, mr.name, idx);
             match mr.page_size as PageSize {
-                PageSize::Small => small_page_names_by_size.push(page_str),
-                PageSize::Large => large_page_names_by_size.push(page_str),
+                PageSize::Small => small_page_names.push(page_str),
+                PageSize::Large => large_page_names.push(page_str),
             }
         }
     }
+
+    // TODO: not sure if this HashMap approach is the most efficient?
+    let mut page_objects: HashMap<ObjectType, Vec<KernelObject>> = HashMap::new();
+
+    let large_page_objects = init_system.allocate_objects(ObjectType::LargePage, &large_page_names, None);
+    let small_page_objects = init_system.allocate_objects(ObjectType::SmallPage, &small_page_names, None);
+
+    page_objects.insert(ObjectType::LargePage, large_page_objects);
+    page_objects.insert(ObjectType::SmallPage, small_page_objects);
 
     BuiltSystem {}
 }
