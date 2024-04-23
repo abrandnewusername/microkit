@@ -1373,12 +1373,12 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let mut large_page_names = Vec::new();
     // let mut ipc_buffer_objects
 
-    for pd in system.protection_domains {
+    for pd in &system.protection_domains {
         let ipc_buffer_str = format!("Page({}): IPC Buffer PD={}", util::human_size_strict(PageSize::Small as u64), pd.name);
         small_page_names.push(ipc_buffer_str);
     }
 
-    for mr in all_mrs {
+    for mr in &all_mrs {
         if mr.phys_addr.is_some() {
             continue;
         }
@@ -1394,13 +1394,32 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     }
 
     // TODO: not sure if this HashMap approach is the most efficient?
-    let mut page_objects: HashMap<ObjectType, Vec<KernelObject>> = HashMap::new();
+    let mut page_objects: HashMap<PageSize, Vec<KernelObject>> = HashMap::new();
 
     let large_page_objects = init_system.allocate_objects(ObjectType::LargePage, &large_page_names, None);
     let small_page_objects = init_system.allocate_objects(ObjectType::SmallPage, &small_page_names, None);
 
-    page_objects.insert(ObjectType::LargePage, large_page_objects);
-    page_objects.insert(ObjectType::SmallPage, small_page_objects);
+    page_objects.insert(PageSize::Large, large_page_objects);
+    page_objects.insert(PageSize::Small, small_page_objects);
+
+    let mut mr_pages: HashMap<&SysMemoryRegion, &[KernelObject]> = HashMap::new();
+    let mut pg_idx: HashMap<PageSize, u64> = HashMap::new();
+
+    // TODO: should do len of ipc_buffer_objects?
+    pg_idx.insert(PageSize::Small, system.protection_domains.len() as u64);
+    pg_idx.insert(PageSize::Large, 0);
+
+    for mr in &all_mrs {
+        if mr.phys_addr.is_some() {
+            mr_pages.insert(mr, &[]);
+            continue;
+        }
+        // TODO: big mess, way to much going on with all these conversions etc
+        let idx = *pg_idx.get(&mr.page_size).unwrap() as usize;
+        mr_pages.insert(mr, &page_objects[&mr.page_size][idx..idx + mr.page_count as usize]);
+        // We assume that the entry for all possible page sizes already exists
+        *pg_idx.get_mut(&mr.page_size).unwrap() += mr.page_count;
+    }
 
     BuiltSystem {}
 }
