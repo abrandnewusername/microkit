@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use quick_xml::de::Deserializer;
 use serde::{Deserialize};
-use crate::sel4::PageSize;
+use crate::sel4::{PageSize, ArmIrqTrigger};
 
 #[derive(Deserialize, Debug, PartialEq)]
 struct XmlProgramImage {
@@ -25,12 +25,12 @@ struct XmlSystemDescription {
 
 #[repr(u8)]
 pub enum SysMapPerms {
-    Read,
-    Write,
-    Execute
+    Read = 1,
+    Write = 2,
+    Execute = 4,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SysMap {
     pub mr: String,
     pub vaddr: u64,
@@ -47,11 +47,17 @@ pub struct SysMemoryRegion {
     pub phys_addr: Option<u64>,
 }
 
+impl SysMemoryRegion {
+    pub fn page_bytes(&self) -> u64 {
+        self.page_size as u64
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysIrq {
-    irq: u64,
-    id: u64,
-    // TODO: trigger
+    pub irq: u64,
+    pub id: u64,
+    pub trigger: ArmIrqTrigger,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]

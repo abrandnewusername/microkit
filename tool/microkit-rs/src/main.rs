@@ -3,7 +3,8 @@ mod util;
 mod elf;
 mod sel4;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::iter::zip;
 use std::fs;
 use std::path::{Path, PathBuf};
 use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
@@ -11,8 +12,8 @@ use elf::ElfFile;
 use sel4::{Invocation, ObjectType, Rights, PageSize};
 
 // TODO: use a better typed thing?
-// const SEL4_ARM_PAGE_CACHEABLE: u64 = 1;
-// const SEL4_ARM_PARITY_ENABLED: u64 = 2;
+const SEL4_ARM_PAGE_CACHEABLE: u64 = 1;
+const SEL4_ARM_PARITY_ENABLED: u64 = 2;
 const SEL4_ARM_EXECUTE_NEVER: u64 = 4;
 const SEL4_ARM_DEFAULT_VMATTRIBUTES: u64 = 3;
 
@@ -26,9 +27,9 @@ const SEL4_ARM_DEFAULT_VMATTRIBUTES: u64 = 3;
 // const BASE_IRQ_CAP: usize = BASE_OUTPUT_ENDPOINT_CAP + 64;
 const MAX_SYSTEM_INVOCATION_SIZE: u64 = util::mb(128) as u64;
 // const PD_CAPTABLE_BITS: usize = 12;
-// const PD_CAP_SIZE: usize = 256;
+const PD_CAP_SIZE: u64 = 256;
 // const PD_CAP_BITS: usize = PD_CAP_SIZE.ilog2() as usize;
-// const PD_SCHEDCONTEXT_SIZE: usize = 1 << 8;
+const PD_SCHEDCONTEXT_SIZE: u64 = 1 << 8;
 
 const SLOT_BITS: u64 = 5;
 const SLOT_SIZE: u64 = 1 << SLOT_BITS;
@@ -94,7 +95,7 @@ struct InitSystem<'a> {
     cap_slot: u64,
     last_fixed_address: u64,
     device_untyped: Vec<FixedUntypedAlloc>,
-    cap_address_names: &'a mut HashMap<u64, &'a str>,
+    cap_address_names: &'a mut HashMap<u64, String>,
     objects: Vec<KernelObject>,
 }
 
@@ -106,7 +107,7 @@ impl<'a> InitSystem<'a> {
                kernel_object_allocator: &'a mut KernelObjectAllocator,
                kernel_boot_info: &'a KernelBootInfo,
                invocations: &'a mut Vec<Invocation>,
-               cap_address_names: &'a mut HashMap<u64, &'a str>,
+               cap_address_names: &'a mut HashMap<u64, String>,
                ) -> InitSystem<'a> {
         let mut device_untyped: Vec<FixedUntypedAlloc> = kernel_boot_info.untyped_objects
                             .iter()
@@ -162,7 +163,7 @@ impl<'a> InitSystem<'a> {
     }
 
     /// Note: Fixed objects must be allocated in order!
-    pub fn allocate_fixed_objects(&mut self, phys_address: u64, object_type: ObjectType, count: u64, names: &'a Vec<String>) -> Vec<KernelObject> {
+    pub fn allocate_fixed_objects(&mut self, phys_address: u64, object_type: ObjectType, count: u64, names: Vec<String>) -> Vec<KernelObject> {
         assert!(phys_address >= self.last_fixed_address);
         assert!(object_type.fixed_size().is_some());
         assert!(count == names.len() as u64);
@@ -234,22 +235,21 @@ impl<'a> InitSystem<'a> {
         fut.watermark = phys_address + alloc_size;
         self.last_fixed_address = phys_address + alloc_size;
         let cap_addr = self.cnode_mask | object_cap;
-        self.cap_address_names.insert(cap_addr, &names[0]);
-
+        let name = &names[0];
         let kernel_object = KernelObject{
-            // TODO: not sure if we can get away with removing this clone
-            name: names[0].clone(),
+            name: name.clone(),
             object_type,
             cap_slot: object_cap,
             cap_addr,
             phys_addr: phys_address,
         };
         self.objects.push(kernel_object.clone());
+        self.cap_address_names.insert(cap_addr, name.clone());
 
         vec![kernel_object]
     }
 
-    pub fn allocate_objects(&mut self, object_type: ObjectType, names: &'a Vec<String>, size: Option<u64>) -> Vec<KernelObject> {
+    pub fn allocate_objects(&mut self, object_type: ObjectType, names: Vec<String>, size: Option<u64>) -> Vec<KernelObject> {
         let count = names.len() as u64;
 
         let alloc_size;
@@ -297,7 +297,6 @@ impl<'a> InitSystem<'a> {
             let cap_slot = base_cap_slot + idx;
             let cap_addr = self.cnode_mask | cap_slot;
             let name = &names[idx as usize];
-            self.cap_address_names.insert(cap_addr, &name);
             kernel_objects.push(KernelObject{
                 // TODO: not sure if we can get away with removing this clone
                 name: name.clone(),
@@ -306,6 +305,7 @@ impl<'a> InitSystem<'a> {
                 cap_addr,
                 phys_addr,
             });
+            self.cap_address_names.insert(cap_addr, name.clone());
 
             phys_addr += alloc_size;
         }
@@ -940,13 +940,13 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     assert!(invocation_table_size % kernel_config.minimum_page_size == 0);
     assert!(invocation_table_size <= MAX_SYSTEM_INVOCATION_SIZE);
 
-    let mut cap_address_names: HashMap<u64, &str> = HashMap::new();
-    cap_address_names.insert(INIT_NULL_CAP_ADDRESS, "null");
-    cap_address_names.insert(INIT_TCB_CAP_ADDRESS, "TCB: init");
-    cap_address_names.insert(INIT_CNODE_CAP_ADDRESS, "CNode: init");
-    cap_address_names.insert(INIT_VSPACE_CAP_ADDRESS, "VSpace: init");
-    cap_address_names.insert(INIT_ASID_POOL_CAP_ADDRESS, "ASID Pool: init");
-    cap_address_names.insert(IRQ_CONTROL_CAP_ADDRESS, "IRQ Control");
+    let mut cap_address_names: HashMap<u64, String> = HashMap::new();
+    cap_address_names.insert(INIT_NULL_CAP_ADDRESS, "null".to_string());
+    cap_address_names.insert(INIT_TCB_CAP_ADDRESS, "TCB: init".to_string());
+    cap_address_names.insert(INIT_CNODE_CAP_ADDRESS, "CNode: init".to_string());
+    cap_address_names.insert(INIT_VSPACE_CAP_ADDRESS, "VSpace: init".to_string());
+    cap_address_names.insert(INIT_ASID_POOL_CAP_ADDRESS, "ASID Pool: init".to_string());
+    cap_address_names.insert(IRQ_CONTROL_CAP_ADDRESS, "IRQ Control".to_string());
 
     let system_cnode_bits = system_cnode_size.ilog2() as u64;
 
@@ -1069,13 +1069,13 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let root_cnode_bits = 1;
     let root_cnode_allocation = kao.alloc((1 << root_cnode_bits) * (1 << SLOT_BITS));
     let root_cnode_cap = kernel_boot_info.first_available_cap;
-    cap_address_names.insert(root_cnode_cap, "CNode: root");
+    cap_address_names.insert(root_cnode_cap, "CNode: root".to_string());
 
     // 2.1.2: Allocate the *system* CNode. It is the cnodes that
     // will have enough slots for all required caps.
     let system_cnode_allocation = kao.alloc(system_cnode_size * (1 << SLOT_BITS));
     let system_cnode_cap = kernel_boot_info.first_available_cap + 1;
-    cap_address_names.insert(system_cnode_cap, "CNode: system");
+    cap_address_names.insert(system_cnode_cap, "CNode: system".to_string());
 
     // 2.1.3: Now that we've allocated the space for these we generate
     // the actual systems calls.
@@ -1109,7 +1109,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         src_root: INIT_CNODE_CAP_ADDRESS,
         src_obj: INIT_CNODE_CAP_ADDRESS,
         src_depth: kernel_config.cap_address_bits,
-        rights: Rights::All,
+        rights: Rights::All as u64,
         badge: guard,
     });
 
@@ -1152,7 +1152,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         src_root: INIT_CNODE_CAP_ADDRESS,
         src_obj: system_cnode_cap,
         src_depth: kernel_config.cap_address_bits,
-        rights: Rights::All,
+        rights: Rights::All as u64,
         badge: system_guard
     });
 
@@ -1179,7 +1179,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let pages_required = invocation_table_size / kernel_config.minimum_page_size;
     let base_page_cap = 0;
     for pta in base_page_cap..base_page_cap + pages_required {
-        cap_address_names.insert(system_cap_address_mask | pta, "SmallPage: monitor invocation table");
+        cap_address_names.insert(system_cap_address_mask | pta, "SmallPage: monitor invocation table".to_string());
     }
 
     let mut remaining_pages = pages_required;
@@ -1225,7 +1225,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let base_page_table_cap = cap_slot;
 
     for pta in base_page_table_cap..base_page_table_cap + page_tables_required {
-        cap_address_names.insert(system_cap_address_mask | pta, "PageTable: monitor");
+        cap_address_names.insert(system_cap_address_mask | pta, "PageTable: monitor".to_string());
     }
 
     assert!(page_tables_required <= kernel_config.fan_out_limit);
@@ -1296,7 +1296,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // Now we create additional MRs (and mappings) for the ELF files.
     let mut regions = Vec::new();
     let mut extra_mrs = Vec::new();
-    let mut pd_extra_maps: HashMap<&ProtectionDomain, SysMap> = HashMap::new();
+    let mut pd_extra_maps: HashMap<&ProtectionDomain, Vec<SysMap>> = HashMap::new();
     for pd in &system.protection_domains {
         let mut seg_idx = 0;
         for segment in &pd_elf_files[pd].segments {
@@ -1330,7 +1330,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
                 name: name,
                 size: aligned_size.into(),
                 page_size: PageSize::Small,
-                page_count: aligned_size / 0x1000,
+                page_count: aligned_size / PageSize::Small as u64,
                 phys_addr: Some(phys_addr_next)
             };
             seg_idx += 1;
@@ -1342,7 +1342,12 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
                 perms: perms,
                 cached: true,
             };
-            pd_extra_maps.insert(pd, mp);
+            let mut extra_maps_option = pd_extra_maps.get_mut(&pd);
+            if let Some(extra_maps) = extra_maps_option {
+                extra_maps.push(mp);
+            } else {
+                pd_extra_maps.insert(pd, vec![mp]);
+            }
 
             // Add to extra_mrs at the end to avoid movement issues with the MR since it's used in
             // constructing the SysMap struct
@@ -1394,15 +1399,16 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     }
 
     // TODO: not sure if this HashMap approach is the most efficient?
+    // TODO: in addition, mr_pages is a copy of page_objects.... yikes
     let mut page_objects: HashMap<PageSize, Vec<KernelObject>> = HashMap::new();
 
-    let large_page_objects = init_system.allocate_objects(ObjectType::LargePage, &large_page_names, None);
-    let small_page_objects = init_system.allocate_objects(ObjectType::SmallPage, &small_page_names, None);
+    let large_page_objects = init_system.allocate_objects(ObjectType::LargePage, large_page_names, None);
+    let small_page_objects = init_system.allocate_objects(ObjectType::SmallPage, small_page_names, None);
 
     page_objects.insert(PageSize::Large, large_page_objects);
     page_objects.insert(PageSize::Small, small_page_objects);
 
-    let mut mr_pages: HashMap<&SysMemoryRegion, &[KernelObject]> = HashMap::new();
+    let mut mr_pages: HashMap<&SysMemoryRegion, Vec<KernelObject>> = HashMap::new();
     let mut pg_idx: HashMap<PageSize, u64> = HashMap::new();
 
     // TODO: should do len of ipc_buffer_objects?
@@ -1411,15 +1417,320 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
     for mr in &all_mrs {
         if mr.phys_addr.is_some() {
-            mr_pages.insert(mr, &[]);
+            mr_pages.insert(mr, vec![]);
             continue;
         }
         // TODO: big mess, way to much going on with all these conversions etc
         let idx = *pg_idx.get(&mr.page_size).unwrap() as usize;
-        mr_pages.insert(mr, &page_objects[&mr.page_size][idx..idx + mr.page_count as usize]);
+        mr_pages.insert(mr, page_objects[&mr.page_size][idx..idx + mr.page_count as usize].to_vec());
         // We assume that the entry for all possible page sizes already exists
         *pg_idx.get_mut(&mr.page_size).unwrap() += mr.page_count;
     }
+
+    // 3.2 Now allocate all the fixed mRs
+
+    // First we need to find all the requested pages and sorted them
+    let mut fixed_pages = Vec::new();
+    for mr in &all_mrs {
+        if let Some(mut phys_addr) = mr.phys_addr {
+            for _ in 0..mr.page_count {
+                fixed_pages.push((phys_addr, mr));
+                phys_addr += mr.page_bytes();
+            }
+        }
+    }
+
+    // Sort based on the starting physical address
+    // TODO: check that this is correct
+    fixed_pages.sort_by_key(|p| p.0);
+
+    // FIXME: At this point we can recombine them into
+    // groups to optimize allocation
+
+    for (phys_addr, mr) in fixed_pages {
+        let obj_type = match mr.page_size {
+            PageSize::Small => ObjectType::SmallPage,
+            PageSize::Large => ObjectType::LargePage,
+        };
+
+        let obj_type_name = format!("Page({})", util::human_size_strict(mr.page_size as u64));
+        let name = format!("{}: MR={} @ {:x}", obj_type_name, mr.name, phys_addr);
+        let page = init_system.allocate_fixed_objects(phys_addr, obj_type, 1, vec![name]);
+        assert!(page.len() == 1);
+        // TODO: is this extend just doing a clone?
+        mr_pages.get_mut(mr).unwrap().extend(page);
+    }
+
+    let tcb_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("TCB: PD={}", pd.name)).collect();
+    let tcb_objs = init_system.allocate_objects(ObjectType::Tcb, tcb_names, None);
+    let tcb_caps: Vec<u64> = tcb_objs.iter().map(|tcb| tcb.cap_addr).collect();
+
+    let sched_context_names = system.protection_domains.iter().map(|pd| format!("SchedContext: PD={}", pd.name)).collect();
+    let sched_context_objs = init_system.allocate_objects(ObjectType::SchedContext, sched_context_names, Some(PD_SCHEDCONTEXT_SIZE));
+    let sched_context_caps: Vec<u64> = sched_context_objs.iter().map(|sc| sc.cap_addr).collect();
+
+    let pp_protection_domains: Vec<&ProtectionDomain> = system.protection_domains.iter().filter(|pd| pd.pp).collect();
+
+    // TODO: this logic could be a bit cleaner...
+    let pd_endpoint_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("EP: PD={}", pd.name)).collect();
+    let endpoint_names = [vec![format!("EP: Monitor Fault")], pd_endpoint_names].concat();
+
+    let pd_reply_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("Reply: PD={}", pd.name)).collect();
+    let reply_names = [vec![format!("Reply: Monitor")], pd_reply_names].concat();
+    let reply_objs = init_system.allocate_objects(ObjectType::Reply, reply_names, None);
+    let reply_obj = &reply_objs[0];
+    // FIXME: Probably only need reply objects for PPs
+    let pd_reply_objs = &reply_objs[1..];
+    let endpoint_objs = init_system.allocate_objects(ObjectType::Endpoint, endpoint_names, None);
+    let fault_ep_endpoint_object = &endpoint_objs[0];
+    // let pp_ep_endpoint_objs: Vec<(&ProtectionDomain, &[KernelObject])> = zip(pp_protection_domains, &endpoint_objs[1..]).collect();
+
+    let notification_names = system.protection_domains.iter().map(|pd| format!("Notification: PD={}", pd.name)).collect();
+    let notification_objs = init_system.allocate_objects(ObjectType::Notification, notification_names, None);
+    // let notification_objs_by_pd: Vec<(&ProtectionDomain, &[KernelObject])> = zip(system.protection_domains, &notification_objs).collect();
+    let notification_caps = notification_objs.iter().map(|ntfn| ntfn.cap_addr);
+
+    // Determine number of upper directory / directory / page table objects required
+    //
+    // Upper directory (level 3 table) is based on how many 512 GiB parts of the address
+    // space is covered (normally just 1!).
+    //
+    // Page directory (level 2 table) is based on how many 1,024 MiB parts of
+    // the address space is covered
+    //
+    // Page table (level 3 table) is based on how many 2 MiB parts of the
+    // address space is covered (excluding any 2MiB regions covered by large
+    // pages).
+    let mut uds: Vec<(usize, u64)> = Vec::new();
+    let mut ds: Vec<(usize, u64)> = Vec::new();
+    let mut pts: Vec<(usize, u64)> = Vec::new();
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol("__sel4_ipc_buffer_obj");
+        let mut upper_directory_vaddrs = HashSet::new();
+        let mut directory_vaddrs = HashSet::new();
+        let mut page_table_vaddrs = HashSet::new();
+
+        // For each page, in each map determine we determine
+        // which upper directory, directory and page table is resides
+        // in, and then page sure this is set
+        let mut vaddrs = vec![(ipc_buffer_vaddr, PageSize::Small)];
+        for map_set in [&pd.maps, &pd_extra_maps[pd]] {
+            for map in map_set {
+                let mr = all_mr_by_name[map.mr.as_str()];
+                let mut vaddr = map.vaddr;
+                for _ in 0..mr.page_count {
+                    vaddrs.push((vaddr, mr.page_size));
+                    vaddr += mr.page_bytes();
+                }
+            }
+        }
+
+        for (vaddr, page_size) in vaddrs {
+            upper_directory_vaddrs.insert(util::mask_bits(vaddr, 12 + 9 + 9 + 9));
+            directory_vaddrs.insert(util::mask_bits(vaddr, 12 + 9 + 9));
+            if page_size == PageSize::Small {
+                page_table_vaddrs.insert(util::mask_bits(vaddr, 12 + 9));
+            }
+        }
+
+        // TODO: find out if we can simplify....
+        let pd_uds: Vec<(usize, u64)> = upper_directory_vaddrs.into_iter().map(|vaddr| (pd_idx, vaddr)).collect();
+        uds.extend(pd_uds);
+        let pd_ds: Vec<(usize, u64)> = directory_vaddrs.into_iter().map(|vaddr| (pd_idx, vaddr)).collect();
+        ds.extend(pd_ds);
+        let pd_pts: Vec<(usize, u64)> = page_table_vaddrs.into_iter().map(|vaddr| (pd_idx, vaddr)).collect();
+        pts.extend(pd_pts);
+    }
+
+    let pd_names: Vec<&str> = system.protection_domains.iter().map(|pd| pd.name.as_str()).collect();
+
+    let vspace_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("VSpace: PD={}", pd.name)).collect();
+    let vspace_objs = init_system.allocate_objects(ObjectType::VSpace, vspace_names, None);
+
+    let ud_names = uds.iter().map(|(pd_idx, vaddr)| format!("PageTable: PD={} VADDR=0x{:x}", pd_names[*pd_idx], vaddr)).collect();
+    let ud_objs = init_system.allocate_objects(ObjectType::PageTable, ud_names, None);
+
+    let d_names = ds.iter().map(|(pd_idx, vaddr)| format!("PageTable: PD={} VADDR=0x{:x}", pd_names[*pd_idx], vaddr)).collect();
+    let d_objs = init_system.allocate_objects(ObjectType::PageTable, d_names, None);
+
+    let pt_names = pts.iter().map(|(pd_idx, vaddr)| format!("PageTable: PD={} VADDR=0x{:x}", pd_names[*pd_idx], vaddr)).collect();
+    let pt_objs = init_system.allocate_objects(ObjectType::PageTable, pt_names, None);
+
+    uds.sort_by_key(|ud| ud.1);
+    ds.sort_by_key(|d| d.1);
+    pts.sort_by_key(|pt| pt.1);
+
+    // Create CNodes - all CNode objects are the same size: 128 slots.
+    let cnode_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("CNode: PD={}", pd.name)).collect();
+    let cnode_objs = init_system.allocate_objects(ObjectType::CNode, cnode_names, Some(PD_CAP_SIZE));
+    // let cnode_objs_by_pd: Vec<(&ProtectionDomain, &[KernelObject])> = zip(&system.protection_domains, &cnode_objs).collect();
+
+    let mut cap_slot = init_system.cap_slot;
+
+    // Create all the necessary interrupt handler objects. These aren't
+    // created through retype though!
+    let mut irq_cap_addresses: HashMap<&ProtectionDomain, Vec<u64>> = HashMap::new();
+    for pd in &system.protection_domains {
+        for sysirq in &pd.irqs {
+            let cap_address = system_cap_address_mask | cap_slot;
+            system_invocations.push(Invocation::IrqControlGetTrigger{
+                irq_control: IRQ_CONTROL_CAP_ADDRESS,
+                irq: sysirq.irq,
+                trigger: sysirq.trigger,
+                dest_root: root_cnode_cap,
+                dest_index: cap_address,
+                dest_depth: kernel_config.cap_address_bits,
+            });
+
+            cap_slot += 1;
+            cap_address_names.insert(cap_address, format!("IRQ Handler: irq={}", sysirq.irq));
+            if let Some(pd_irq_cap_addrs) = irq_cap_addresses.get_mut(pd) {
+                pd_irq_cap_addrs.push(cap_address);
+            } else {
+                irq_cap_addresses.insert(pd, vec![cap_address]);
+            }
+        }
+    }
+
+    // This has to be done prior to minting!
+    let mut invocation = Invocation::AsidPoolAssign {
+        asid_pool: INIT_ASID_POOL_CAP_ADDRESS,
+        vspace: vspace_objs[0].cap_addr,
+    };
+    invocation.repeat(system.protection_domains.len() as u64, Invocation::AsidPoolAssign{
+        asid_pool: 0,
+        vspace: 1,
+    });
+
+    // Create copies of all caps required via minting.
+
+    // Mint copies of required pages, while also determing what's required
+    // for later mapping
+    let mut page_descriptors = Vec::new();
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        for map_set in [&pd.maps, &pd_extra_maps[pd]] {
+            for mp in map_set {
+                let mr = all_mr_by_name[mp.mr.as_str()];
+                let mut rights: u64 = 0;
+                let mut attrs = SEL4_ARM_PARITY_ENABLED;
+                // TODO: this is a bit awkward
+                if mp.perms & SysMapPerms::Read as u8 != 0 {
+                    rights |= Rights::Read as u64;
+                }
+                if mp.perms & SysMapPerms::Write as u8 != 0 {
+                    rights |= Rights::Write as u64;
+                }
+                if mp.perms & SysMapPerms::Execute as u8 != 0 {
+                    attrs |= SEL4_ARM_EXECUTE_NEVER;
+                }
+                if mp.cached {
+                    attrs |= SEL4_ARM_PAGE_CACHEABLE;
+                }
+
+                assert!(mr_pages[mr].len() > 0);
+                assert!(util::objects_adjacent(&mr_pages[mr]));
+
+                let mut invocation = Invocation::CnodeMint{
+                    cnode: system_cnode_cap,
+                    dest_index: cap_slot,
+                    dest_depth: system_cnode_bits,
+                    src_root: root_cnode_cap,
+                    src_obj: mr_pages[mr][0].cap_addr,
+                    src_depth: kernel_config.cap_address_bits,
+                    rights: rights,
+                    badge: 0,
+                };
+                invocation.repeat(mr_pages[mr].len() as u64, Invocation::CnodeMint{
+                    cnode: 0,
+                    dest_index: 1,
+                    dest_depth: 0,
+                    src_root: 0,
+                    src_obj: 1,
+                    src_depth: 0,
+                    rights: 0,
+                    badge: 0,
+                });
+                system_invocations.push(invocation);
+
+                page_descriptors.push((
+                    system_cap_address_mask | cap_slot,
+                    pd_idx,
+                    vaddr,
+                    rights,
+                    attrs,
+                    mr_pages[mr].len(),
+                    mr.page_bytes()
+                ));
+
+                for idx in 0..mr_pages[mr].len() {
+                    cap_address_names.insert(
+                        system_cap_address_mask | (cap_slot + idx as u64),
+                        format!("{} (derived)", cap_address_names.get(&(mr_pages[mr][0].cap_addr + idx as u64)).unwrap())
+                    );
+                }
+
+                cap_slot += mr_pages[mr].len() as u64;
+            }
+        }
+    }
+
+    let badged_irq_caps: HashMap<&ProtectionDomain, Vec<u64>> = HashMap::new();
+    for (notification_obj, pd) in zip(notification_objs, &system.protection_domains) {
+        for sysirq in &pd.irqs {
+            let badge = 1 << sysirq.id;
+            let badged_cap_address = system_cap_address_mask | cap_slot;
+            system_invocations.push(Invocation::CnodeMint{
+                cnode: system_cnode_cap,
+                dest_index: cap_slot,
+                dest_depth: system_cnode_bits,
+                src_root: root_cnode_cap,
+                src_obj: notification_obj.cap_addr,
+                src_depth: kernel_config.cap_address_bits,
+                rights: Rights::All as u64,
+                badge: badge,
+            });
+            let badged_name = format!("{} (badge=0x{:x}", cap_address_names[&notification_obj.cap_addr], badge);
+            cap_address_names.insert(badged_cap_address, badged_name);
+            cap_slot += 1;
+        }
+    }
+
+    let mut invocation = Invocation::CnodeMint{
+        cnode: system_cnode_cap,
+        dest_index: cap_slot,
+        dest_depth: system_cnode_bits,
+        src_root: root_cnode_cap,
+        src_obj: fault_ep_endpoint_object.cap_addr,
+        src_depth: kernel_config.cap_address_bits,
+        rights: Rights::All as u64,
+        badge: 1,
+    };
+    invocation.repeat(system.protection_domains.len() as u64, Invocation::CnodeMint{
+        cnode: 0,
+        dest_index: 1,
+        dest_depth: 0,
+        src_root: 0,
+        src_obj: 0,
+        src_depth: 0,
+        rights: 0,
+        badge: 1,
+    });
+    system_invocations.push(invocation);
+
+    let badged_fault_ep = system_cap_address_mask | cap_slot;
+    cap_slot += system.protection_domains.len() as u64;
+
+    let final_cap_slot = cap_slot;
+
+    // Minting in the address space
+    // for (idx, pd) in system.protection_domains.iter().enumerate() {
+    //     let obj = if pd.pp {
+    //         pp_ep_endpoint_objs[pd]
+    //     } else {
+    //         notification_objects[idx]
+    //     };
+    //     assert!(INPUT_CAP_IDX < PD_CAP_SIZE);
+    // }
 
     BuiltSystem {}
 }

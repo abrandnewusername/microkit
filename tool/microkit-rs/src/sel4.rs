@@ -60,8 +60,18 @@ pub const OBJECT_SIZE_VSPACE: u64 = 4 * 1024;
 
 pub enum Rights {
     None = 0x0,
+    Write = 0x1,
     Read = 0x2,
+    Grant = 0x4,
+    GrantReply = 0x8,
     All = 0xf,
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum ArmIrqTrigger {
+    Level = 0,
+    Edge = 1,
 }
 
 enum InvocationLabel {
@@ -137,6 +147,7 @@ pub struct Aarch64Regs {
 
 impl Invocation {
     pub fn generic(self) {
+        // IMPLEMENT
         let (_, _, _): (InvocationLabel, &[u64], &[u64]) = match self {
             Invocation::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } =>
                                           (InvocationLabel::UntypedRetype, &[untyped, object_type as u64, size_bits, root, node_index, node_depth, node_offset, num_objects], &[root]),
@@ -146,7 +157,9 @@ impl Invocation {
         };
     }
 
+    // TODO: count should probably be usize...
     pub fn repeat(&mut self, _count: u64, _repeat: Invocation) {
+        // IMPLEMENT
     }
 }
 
@@ -193,14 +206,14 @@ pub enum Invocation {
         tcb: u64,
         notification: u64,
     },
-    AsidPoolAsign {
+    AsidPoolAssign {
         asid_pool: u64,
         vspace: u64,
     },
     IrqControlGetTrigger {
         irq_control: u64,
         irq: u64,
-        trigger: u64,
+        trigger: ArmIrqTrigger,
         dest_root: u64,
         dest_index: u64,
         dest_depth: u64,
@@ -229,7 +242,7 @@ pub enum Invocation {
         src_root: u64,
         src_obj: u64,
         src_depth: u64,
-        rights: Rights,
+        rights: u64,
         badge: u64,
     },
     CnodeCopy {

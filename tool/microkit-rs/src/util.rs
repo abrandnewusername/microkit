@@ -1,3 +1,5 @@
+use crate::KernelObject;
+
 pub fn msb(x: u64) -> u64 {
     64 - x.leading_zeros() as u64 - 1
 }
@@ -48,6 +50,25 @@ pub const fn round_down(n: u64, x: u64) -> u64 {
 pub fn is_power_of_two(n: u64) -> bool {
     assert!(n > 0);
     n & (n - 1) == 0
+}
+
+/// mask out (set to zero) the lower bits from n
+pub fn mask_bits(n: u64, bits: u64) -> u64 {
+    assert!(n > 0);
+    (n >> bits) << bits
+}
+
+/// Check that all objects in the list are adjacent
+pub fn objects_adjacent(objects: &Vec<KernelObject>) -> bool {
+    let mut prev_cap_addr = objects[0].cap_addr;
+    for obj in &objects[1..] {
+        if obj.cap_addr != prev_cap_addr + 1 {
+            return false;
+        }
+        prev_cap_addr = obj.cap_addr;
+    }
+
+    true
 }
 
 /// Product a 'human readable' string for the size.
