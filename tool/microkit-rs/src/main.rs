@@ -11,24 +11,25 @@ use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, Sy
 use elf::ElfFile;
 use sel4::{Invocation, ObjectType, Rights, PageSize};
 
+const SYMBOL_IPC_BUFFER: &str = "__sel4_ipc_buffer_obj";
+
 // TODO: use a better typed thing?
 const SEL4_ARM_PAGE_CACHEABLE: u64 = 1;
 const SEL4_ARM_PARITY_ENABLED: u64 = 2;
 const SEL4_ARM_EXECUTE_NEVER: u64 = 4;
 const SEL4_ARM_DEFAULT_VMATTRIBUTES: u64 = 3;
 
-// const INPUT_CAP_IDX: usize = 1;
-// const FAULT_EP_CAP_IDX: usize = 2;
-// const VSPACE_CAP_IDX: usize = 3;
-// const REPLY_CAP_IDX: usize = 4;
-// const MONITOR_EP_CAP_IDX: usize = 5;
-// const BASE_OUTPUT_NOTIFICATION_CAP: usize = 10;
-// const BASE_OUTPUT_ENDPOINT_CAP: usize = BASE_OUTPUT_NOTIFICATION_CAP + 64;
-// const BASE_IRQ_CAP: usize = BASE_OUTPUT_ENDPOINT_CAP + 64;
+const INPUT_CAP_IDX: u64 = 1;
+const FAULT_EP_CAP_IDX: u64 = 2;
+const VSPACE_CAP_IDX: u64 = 3;
+const REPLY_CAP_IDX: u64 = 4;
+const MONITOR_EP_CAP_IDX: u64 = 5;
+const BASE_OUTPUT_NOTIFICATION_CAP: u64 = 10;
+const BASE_OUTPUT_ENDPOINT_CAP: u64 = BASE_OUTPUT_NOTIFICATION_CAP + 64;
+const BASE_IRQ_CAP: u64 = BASE_OUTPUT_ENDPOINT_CAP + 64;
 const MAX_SYSTEM_INVOCATION_SIZE: u64 = util::mb(128) as u64;
-// const PD_CAPTABLE_BITS: usize = 12;
 const PD_CAP_SIZE: u64 = 256;
-// const PD_CAP_BITS: usize = PD_CAP_SIZE.ilog2() as usize;
+const PD_CAP_BITS: u64 = PD_CAP_SIZE.ilog2() as u64;
 const PD_SCHEDCONTEXT_SIZE: u64 = 1 << 8;
 
 const SLOT_BITS: u64 = 5;
@@ -1262,15 +1263,14 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         page: system_cap_address_mask | base_page_cap,
         vspace: INIT_VSPACE_CAP_ADDRESS,
         vaddr: vaddr,
-        rights: Rights::Read,
+        rights: Rights::Read as u64,
         attr: SEL4_ARM_DEFAULT_VMATTRIBUTES | SEL4_ARM_EXECUTE_NEVER
     };
     map_invocation.repeat(pages_required, Invocation::PageMap{
         page: 1,
         vspace: 0,
         vaddr: kernel_config.minimum_page_size,
-        // TODO: kind of hacky because our abstraction for repeating invocations is hacky
-        rights: Rights::None,
+        rights: 0,
         attr: 0,
     });
     bootstrap_invocations.push(map_invocation);
@@ -1376,7 +1376,6 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // 3.1 Work out how many regular (non-fixed) page objects are required
     let mut small_page_names = Vec::new();
     let mut large_page_names = Vec::new();
-    // let mut ipc_buffer_objects
 
     for pd in &system.protection_domains {
         let ipc_buffer_str = format!("Page({}): IPC Buffer PD={}", util::human_size_strict(PageSize::Small as u64), pd.name);
@@ -1400,13 +1399,16 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
     // TODO: not sure if this HashMap approach is the most efficient?
     // TODO: in addition, mr_pages is a copy of page_objects.... yikes
-    let mut page_objects: HashMap<PageSize, Vec<KernelObject>> = HashMap::new();
+    let mut page_objects: HashMap<PageSize, &Vec<KernelObject>> = HashMap::new();
 
-    let large_page_objects = init_system.allocate_objects(ObjectType::LargePage, large_page_names, None);
-    let small_page_objects = init_system.allocate_objects(ObjectType::SmallPage, small_page_names, None);
+    let large_page_objs = init_system.allocate_objects(ObjectType::LargePage, large_page_names, None);
+    let small_page_objs = init_system.allocate_objects(ObjectType::SmallPage, small_page_names, None);
 
-    page_objects.insert(PageSize::Large, large_page_objects);
-    page_objects.insert(PageSize::Small, small_page_objects);
+    // All the IPC buffers are the first to be allocated which is why this works
+    let ipc_buffer_objs = &small_page_objs[..system.protection_domains.len()];
+
+    page_objects.insert(PageSize::Large, &large_page_objs);
+    page_objects.insert(PageSize::Small, &small_page_objs);
 
     let mut mr_pages: HashMap<&SysMemoryRegion, Vec<KernelObject>> = HashMap::new();
     let mut pg_idx: HashMap<PageSize, u64> = HashMap::new();
@@ -1483,12 +1485,15 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let pd_reply_objs = &reply_objs[1..];
     let endpoint_objs = init_system.allocate_objects(ObjectType::Endpoint, endpoint_names, None);
     let fault_ep_endpoint_object = &endpoint_objs[0];
-    // let pp_ep_endpoint_objs: Vec<(&ProtectionDomain, &[KernelObject])> = zip(pp_protection_domains, &endpoint_objs[1..]).collect();
+    let mut pp_ep_endpoint_objs: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
+    // Because the first reply object is for the monitor, we map from index 1 of endpoint_objs
+    pp_protection_domains.iter().enumerate().map(|(i, pd)| pp_ep_endpoint_objs.insert(pd, &endpoint_objs[1..][i]));
 
     let notification_names = system.protection_domains.iter().map(|pd| format!("Notification: PD={}", pd.name)).collect();
     let notification_objs = init_system.allocate_objects(ObjectType::Notification, notification_names, None);
-    // let notification_objs_by_pd: Vec<(&ProtectionDomain, &[KernelObject])> = zip(system.protection_domains, &notification_objs).collect();
     let notification_caps = notification_objs.iter().map(|ntfn| ntfn.cap_addr);
+    let mut notification_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
+    system.protection_domains.iter().enumerate().map(|(i, pd)| notification_objs_by_pd.insert(pd, &notification_objs[i]));
 
     // Determine number of upper directory / directory / page table objects required
     //
@@ -1505,7 +1510,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let mut ds: Vec<(usize, u64)> = Vec::new();
     let mut pts: Vec<(usize, u64)> = Vec::new();
     for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
-        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol("__sel4_ipc_buffer_obj");
+        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER);
         let mut upper_directory_vaddrs = HashSet::new();
         let mut directory_vaddrs = HashSet::new();
         let mut page_table_vaddrs = HashSet::new();
@@ -1563,7 +1568,8 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // Create CNodes - all CNode objects are the same size: 128 slots.
     let cnode_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("CNode: PD={}", pd.name)).collect();
     let cnode_objs = init_system.allocate_objects(ObjectType::CNode, cnode_names, Some(PD_CAP_SIZE));
-    // let cnode_objs_by_pd: Vec<(&ProtectionDomain, &[KernelObject])> = zip(&system.protection_domains, &cnode_objs).collect();
+    let mut cnode_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
+    system.protection_domains.iter().enumerate().map(|(i, pd)| cnode_objs_by_pd.insert(pd, &cnode_objs[i]));
 
     let mut cap_slot = init_system.cap_slot;
 
@@ -1571,6 +1577,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // created through retype though!
     let mut irq_cap_addresses: HashMap<&ProtectionDomain, Vec<u64>> = HashMap::new();
     for pd in &system.protection_domains {
+        irq_cap_addresses.insert(pd, vec![]);
         for sysirq in &pd.irqs {
             let cap_address = system_cap_address_mask | cap_slot;
             system_invocations.push(Invocation::IrqControlGetTrigger{
@@ -1584,11 +1591,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
             cap_slot += 1;
             cap_address_names.insert(cap_address, format!("IRQ Handler: irq={}", sysirq.irq));
-            if let Some(pd_irq_cap_addrs) = irq_cap_addresses.get_mut(pd) {
-                pd_irq_cap_addrs.push(cap_address);
-            } else {
-                irq_cap_addresses.insert(pd, vec![cap_address]);
-            }
+            irq_cap_addresses.get_mut(pd).unwrap().push(cap_address);
         }
     }
 
@@ -1658,7 +1661,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
                     vaddr,
                     rights,
                     attrs,
-                    mr_pages[mr].len(),
+                    mr_pages[mr].len() as u64,
                     mr.page_bytes()
                 ));
 
@@ -1674,8 +1677,9 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         }
     }
 
-    let badged_irq_caps: HashMap<&ProtectionDomain, Vec<u64>> = HashMap::new();
-    for (notification_obj, pd) in zip(notification_objs, &system.protection_domains) {
+    let mut badged_irq_caps: HashMap<&ProtectionDomain, Vec<u64>> = HashMap::new();
+    for (notification_obj, pd) in zip(&notification_objs, &system.protection_domains) {
+        badged_irq_caps.insert(pd, vec![]);
         for sysirq in &pd.irqs {
             let badge = 1 << sysirq.id;
             let badged_cap_address = system_cap_address_mask | cap_slot;
@@ -1691,6 +1695,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
             });
             let badged_name = format!("{} (badge=0x{:x}", cap_address_names[&notification_obj.cap_addr], badge);
             cap_address_names.insert(badged_cap_address, badged_name);
+            badged_irq_caps.get_mut(pd).unwrap().push(badged_cap_address);
             cap_slot += 1;
         }
     }
@@ -1723,14 +1728,242 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     let final_cap_slot = cap_slot;
 
     // Minting in the address space
-    // for (idx, pd) in system.protection_domains.iter().enumerate() {
-    //     let obj = if pd.pp {
-    //         pp_ep_endpoint_objs[pd]
-    //     } else {
-    //         notification_objects[idx]
-    //     };
-    //     assert!(INPUT_CAP_IDX < PD_CAP_SIZE);
-    // }
+    for (idx, pd) in system.protection_domains.iter().enumerate() {
+        let obj = if pd.pp {
+            pp_ep_endpoint_objs[pd]
+        } else {
+            &notification_objs[idx]
+        };
+        assert!(INPUT_CAP_IDX < PD_CAP_SIZE);
+
+        system_invocations.push(Invocation::CnodeMint {
+            cnode: cnode_objs[idx].cap_addr,
+            dest_index: INPUT_CAP_IDX,
+            dest_depth: PD_CAP_BITS,
+            src_root: root_cnode_cap,
+            src_obj: obj.cap_addr,
+            src_depth: kernel_config.cap_address_bits,
+            rights: Rights::All as u64,
+            badge: 0,
+        });
+    }
+
+    // TODO: compile time asserts for these kind of asserts?
+
+    // Mint access to the reply cap
+    assert!(REPLY_CAP_IDX < PD_CAP_SIZE);
+    let mut reply_mint_invocation = Invocation::CnodeMint {
+        cnode: cnode_objs[0].cap_addr,
+        dest_index: REPLY_CAP_IDX,
+        dest_depth: PD_CAP_BITS,
+        src_root: root_cnode_cap,
+        src_obj: pd_reply_objs[0].cap_addr,
+        src_depth: kernel_config.cap_address_bits,
+        rights: Rights::All as u64,
+        badge: 1,
+    };
+    reply_mint_invocation.repeat(system.protection_domains.len() as u64, Invocation::CnodeMint {
+        cnode: 1,
+        dest_index: 0,
+        dest_depth: 0,
+        src_root: 0,
+        src_obj: 1,
+        src_depth: 0,
+        rights: 0,
+        badge: 0,
+    });
+    system_invocations.push(reply_mint_invocation);
+
+    // Mint access to the VSpace cap
+    assert!(VSPACE_CAP_IDX < PD_CAP_SIZE);
+    let mut vspace_mint_invocation = Invocation::CnodeMint {
+        cnode: cnode_objs[0].cap_addr,
+        dest_index: VSPACE_CAP_IDX,
+        dest_depth: PD_CAP_BITS,
+        src_root: root_cnode_cap,
+        src_obj: vspace_objs[0].cap_addr,
+        src_depth: kernel_config.cap_address_bits,
+        rights: Rights::All as u64,
+        badge: 0,
+    };
+    vspace_mint_invocation.repeat(system.protection_domains.len() as u64, Invocation::CnodeMint {
+        cnode: 1,
+        dest_index: 0,
+        dest_depth: 0,
+        src_root: 0,
+        src_obj: 1,
+        src_depth: 0,
+        rights: 0,
+        badge: 0,
+    });
+    system_invocations.push(vspace_mint_invocation);
+
+    // Mint access to interrupt handlers in the PD CSpace
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        for (sysirq, irq_cap_address) in zip(&pd.irqs, &irq_cap_addresses[pd]) {
+            let cap_idx = BASE_IRQ_CAP + sysirq.id;
+            assert!(cap_idx < PD_CAP_SIZE);
+            system_invocations.push(Invocation::CnodeMint {
+                cnode: cnode_objs[pd_idx].cap_addr,
+                dest_index: cap_idx,
+                dest_depth: PD_CAP_BITS,
+                src_root: root_cnode_cap,
+                src_obj: *irq_cap_address,
+                src_depth: kernel_config.cap_address_bits,
+                rights: Rights::All as u64,
+                badge: 0,
+            });
+        }
+    }
+
+    for cc in system.channels {
+        let pd_a = cc.pd_a;
+        let pd_b = cc.pd_b;
+        let pd_a_cnode_obj = cnode_objs_by_pd[pd_a];
+        let pd_b_cnode_obj = cnode_objs_by_pd[pd_b];
+        let pd_a_notification_obj = notification_objs_by_pd[pd_a];
+        let pd_b_notification_obj = notification_objs_by_pd[pd_b];
+
+        // Set up the notification caps
+        let pd_a_cap_idx = BASE_OUTPUT_NOTIFICATION_CAP + cc.id_a;
+        let pd_a_badge = 1 << cc.id_b;
+        assert!(pd_a_cap_idx < PD_CAP_SIZE);
+        system_invocations.push(Invocation::CnodeMint {
+            cnode: pd_a_cnode_obj.cap_addr,
+            dest_index: pd_a_cap_idx,
+            dest_depth: PD_CAP_BITS,
+            src_root: root_cnode_cap,
+            src_obj: pd_b_notification_obj.cap_addr,
+            src_depth: kernel_config.cap_address_bits,
+            rights: Rights::All as u64,  // FIXME: Check rights
+            badge: pd_a_badge
+        });
+
+        let pd_b_cap_idx = BASE_OUTPUT_NOTIFICATION_CAP + cc.id_b;
+        let pd_b_badge = 1 << cc.id_a;
+        assert!(pd_b_cap_idx < PD_CAP_SIZE);
+        system_invocations.push(Invocation::CnodeMint {
+            cnode: pd_b_cnode_obj.cap_addr,
+            dest_index: pd_b_cap_idx,
+            dest_depth: PD_CAP_BITS,
+            src_root: root_cnode_cap,
+            src_obj: pd_a_notification_obj.cap_addr,
+            src_depth: kernel_config.cap_address_bits,
+            rights: Rights::All as u64,  // FIXME: Check rights
+            badge: pd_b_badge
+        });
+
+        // Set up the endpoint caps
+        if pd_b.pp {
+            let pd_a_cap_idx = BASE_OUTPUT_NOTIFICATION_CAP + cc.id_a;
+            let pd_a_badge = (1 << 63) | cc.id_b;
+            let pd_b_endpoint_obj = pp_ep_endpoint_objs[pd_b];
+            assert!(pd_a_cap_idx < PD_CAP_BITS);
+
+            system_invocations.push(Invocation::CnodeMint {
+                cnode: pd_a_cnode_obj.cap_addr,
+                dest_index: pd_a_cap_idx,
+                dest_depth: PD_CAP_BITS,
+                src_root: root_cnode_cap,
+                src_obj: pd_b_endpoint_obj.cap_addr,
+                src_depth: kernel_config.cap_address_bits,
+                rights: Rights::All as u64, // FIXME: Check rights
+                badge: pd_a_badge,
+            });
+        }
+
+        if pd_a.pp {
+            let pd_b_cap_idx = BASE_OUTPUT_ENDPOINT_CAP + cc.id_b;
+            let pd_b_badge = (1 << 63) | cc.id_a;
+            let pd_a_endpoint_obj = pp_ep_endpoint_objs[pd_a];
+            assert!(pd_b_cap_idx < PD_CAP_SIZE);
+
+            system_invocations.push(Invocation::CnodeMint {
+                cnode: pd_b_cnode_obj.cap_addr,
+                dest_index: pd_b_cap_idx,
+                dest_depth: PD_CAP_BITS,
+                src_root: root_cnode_cap,
+                src_obj: pd_a_endpoint_obj.cap_addr,
+                src_depth: kernel_config.cap_address_bits,
+                rights: Rights::All as u64, // FIXME: Check rights
+                badge: pd_b_badge,
+            })
+        }
+    }
+
+    // Mint a cap between monitor and passive PDs.
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        if pd.passive {
+            let cnode_obj = &cnode_objs[pd_idx];
+            system_invocations.push(Invocation::CnodeMint {
+                cnode: cnode_obj.cap_addr,
+                dest_index: MONITOR_EP_CAP_IDX,
+                dest_depth: PD_CAP_BITS,
+                src_root: root_cnode_cap,
+                src_obj: fault_ep_endpoint_object.cap_addr,
+                src_depth: kernel_config.cap_address_bits,
+                rights: Rights::All as u64, // FIXME: Check rights
+                // Badge needs to start at 1
+                badge: pd_idx as u64 + 1,
+            })
+        }
+    }
+
+    // All minting is complete at this point
+
+    // Associate badges
+    // FIXME: This could use repeat
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        let notification_obj = &notification_objs[pd_idx];
+        for (irq_cap_address, badged_notification_cap_address) in zip(&irq_cap_addresses[pd], &badged_irq_caps[pd]) {
+            system_invocations.push(Invocation::IrqHandlerSetNotification {
+                irq_handler: *irq_cap_address,
+                notification: *badged_notification_cap_address,
+            });
+        }
+    }
+
+    // Initialise the VSpaces -- assign them all the the initial asid pool.
+    for (descriptors, objects) in [(uds, ud_objs), (ds, d_objs), (pts, pt_objs)] {
+        for ((pd_idx, vaddr), obj) in zip(descriptors, objects) {
+            system_invocations.push(Invocation::PageTableMap{
+                page_table: obj.cap_addr,
+                vspace: vspace_objs[pd_idx].cap_addr,
+                vaddr: vaddr,
+                attr: SEL4_ARM_DEFAULT_VMATTRIBUTES,
+            });
+        }
+    }
+
+    // Now map all the pages
+    for (page_cap_address, pd_idx, vaddr, rights, attr, count, vaddr_incr) in page_descriptors {
+        let mut invocation = Invocation::PageMap {
+            page: page_cap_address,
+            vspace: vspace_objs[pd_idx].cap_addr,
+            vaddr,
+            rights,
+            attr,
+        };
+        invocation.repeat(count, Invocation::PageMap {
+            page: 1,
+            vspace: 0,
+            vaddr: vaddr_incr,
+            rights: 0,
+            attr: 0,
+        })
+    }
+
+    // And, finally, map all the IPC buffers
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        let (vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER);
+        system_invocations.push(Invocation::PageMap {
+            page: ipc_buffer_objs[pd_idx].cap_addr,
+            vspace: vspace_objs[pd_idx].cap_addr,
+            vaddr,
+            rights: Rights::Read as u64 | Rights::Write as u64,
+            attr: SEL4_ARM_DEFAULT_VMATTRIBUTES | SEL4_ARM_EXECUTE_NEVER,
+        });
+    }
 
     BuiltSystem {}
 }

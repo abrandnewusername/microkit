@@ -232,7 +232,7 @@ pub enum Invocation {
         page: u64,
         vspace: u64,
         vaddr: u64,
-        rights: Rights,
+        rights: u64,
         attr: u64,
     },
     CnodeMint {

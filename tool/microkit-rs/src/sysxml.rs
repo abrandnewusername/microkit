@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use quick_xml::de::Deserializer;
 use serde::{Deserialize};
@@ -67,6 +68,14 @@ pub struct SysSetVar {
     vaddr: Option<u64>,
 }
 
+#[derive(Debug)]
+pub struct Channel<'a> {
+    pub pd_a: &'a ProtectionDomain,
+    pub id_a: u64,
+    pub pd_b: &'a ProtectionDomain,
+    pub id_b: u64,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ProtectionDomain {
     pub name: String,
@@ -109,24 +118,28 @@ impl ProtectionDomain {
     }
 }
 
-pub struct SystemDescription {
+pub struct SystemDescription<'a> {
     pub protection_domains: Vec<ProtectionDomain>,
     pub memory_regions: Vec<SysMemoryRegion>,
+    pub channels: Vec<Channel<'a>>,
 }
 
-impl SystemDescription {
-    fn from_xml(xml: &XmlSystemDescription) -> SystemDescription {
-        let pds = xml.protection_domain.iter().map(|pd| ProtectionDomain::from_xml(&pd)).collect();
+impl<'a> SystemDescription<'a> {
+    fn from_xml(xml: &XmlSystemDescription) -> SystemDescription<'a> {
+        let pds: Vec<ProtectionDomain> = xml.protection_domain.iter().map(|pd| ProtectionDomain::from_xml(&pd)).collect();
         // TODO: sort out mrs
         let mrs = Vec::new();
+        // TODO: sort out channels
+        let channels = Vec::new();
         SystemDescription {
             protection_domains: pds,
             memory_regions: mrs,
+            channels,
         }
     }
 }
 
-pub fn parse(xml: &str) -> SystemDescription {
+pub fn parse<'a>(xml: &str) -> SystemDescription<'a> {
     println!("{}", xml);
     let mut deserializer = Deserializer::from_str(xml);
     let system_xml = XmlSystemDescription::deserialize(&mut deserializer).unwrap();
