@@ -87,7 +87,8 @@ struct ElfHeader64 {
 const ELF_MAGIC: &[u8; 4] = b"\x7FELF";
 
 // TODO: is this worth it?
-enum WordSize {
+#[derive(Copy, Clone)]
+pub enum ElfWordSize {
     ThirtyTwo = 32,
     SixtyFour = 64
 }
@@ -126,7 +127,7 @@ enum ElfSegmentAttributes {
 }
 
 pub struct ElfFile {
-    word_size: WordSize,
+    pub word_size: ElfWordSize,
     pub entry: u64,
     pub segments: Vec<ElfSegment>,
     // TODO: figure out how to have this struct be generic for 64-bit and 32-bit?
@@ -152,11 +153,11 @@ impl ElfFile {
         match class {
             1 => {
                 hdr_size = std::mem::size_of::<ElfHeader32>();
-                word_size = WordSize::ThirtyTwo;
+                word_size = ElfWordSize::ThirtyTwo;
             },
             2 => {
                 hdr_size = std::mem::size_of::<ElfHeader64>();
-                word_size = WordSize::SixtyFour;
+                word_size = ElfWordSize::SixtyFour;
             },
             _ => return Err(format!("Invalid class '{}'", class)),
         };

@@ -90,7 +90,7 @@ pub struct ProtectionDomain {
 }
 
 impl ProtectionDomain {
-    fn from_xml(xml: &XmlProtectionDomain) -> ProtectionDomain {
+    fn from_xml(xml: XmlProtectionDomain) -> ProtectionDomain {
         let budget = 1000;
         let period = budget;
         let pp = false;
@@ -103,7 +103,7 @@ impl ProtectionDomain {
         // TODO: need to check that parse works as expected. I don't know
         // what format it expects (hex, decimal, binary etc)
         ProtectionDomain {
-            name: xml.name.clone(),
+            name: xml.name,
             priority: xml.priority.parse::<u32>().unwrap(),
             budget,
             period,
@@ -124,8 +124,8 @@ pub struct SystemDescription<'a> {
 }
 
 impl<'a> SystemDescription<'a> {
-    fn from_xml(xml: &XmlSystemDescription) -> SystemDescription<'a> {
-        let pds: Vec<ProtectionDomain> = xml.protection_domain.iter().map(|pd| ProtectionDomain::from_xml(&pd)).collect();
+    fn from_xml(xml: XmlSystemDescription) -> SystemDescription<'a> {
+        let pds: Vec<ProtectionDomain> = xml.protection_domain.into_iter().map(|pd| ProtectionDomain::from_xml(pd)).collect();
         // TODO: sort out mrs
         let mrs = Vec::new();
         // TODO: sort out channels
@@ -143,5 +143,5 @@ pub fn parse<'a>(xml: &str) -> SystemDescription<'a> {
     let mut deserializer = Deserializer::from_str(xml);
     let system_xml = XmlSystemDescription::deserialize(&mut deserializer).unwrap();
 
-    SystemDescription::from_xml(&system_xml)
+    SystemDescription::from_xml(system_xml)
 }

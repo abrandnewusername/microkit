@@ -25,11 +25,11 @@ mod tests {
     }
 }
 
-pub const fn kb(n: usize) -> usize {
+pub const fn kb(n: u64) -> u64 {
     n * 1024
 }
 
-pub const fn mb(n: usize) -> usize {
+pub const fn mb(n: u64) -> u64 {
     n * 1024 * 1024
 }
 

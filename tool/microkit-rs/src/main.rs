@@ -1,7 +1,8 @@
 mod sysxml;
-mod util;
+pub mod util;
 mod elf;
 mod sel4;
+mod loader;
 
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
@@ -318,10 +319,10 @@ impl<'a> InitSystem<'a> {
     }
 }
 
-struct Region<'a> {
+struct Region {
     name: String,
     addr: u64,
-    data: &'a Vec<u8>,
+    segment_idx: u64,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -463,7 +464,8 @@ impl DisjointMemoryRegion {
         }
 
         if let Some(region) = region_to_remove {
-            self.remove_region(region.base, region.base + size);
+            let removed = self.remove_region(region.base, region.base + size);
+            assert!(removed.is_ok(), "Failed to allocate region [{:x}..{:x})", region.base, region.base + size);
             return region.base;
         } else {
             panic!("Unable to allocate {} bytes", size);
@@ -586,10 +588,11 @@ struct BuiltSystem<'a> {
     tcb_caps: Vec<u64>,
     sched_caps: Vec<u64>,
     ntfn_caps: Vec<u64>,
-    regions: Vec<Region<'a>>,
+    regions: Vec<Region>,
     kernel_objects: Vec<KernelObject>,
     initial_task_virt_region: MemoryRegion,
-    initial_task_phys_region: MemoryRegion
+    initial_task_phys_region: MemoryRegion,
+    pd_elf_files: HashMap<&'a ProtectionDomain, ElfFile>,
 }
 
 /// Determine the physical memory regions for an ELF file with a given
@@ -763,14 +766,14 @@ fn kernel_partial_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile) -> Ke
     // Remove all the actual physical memory from the device regions
     // but add it all to the actual normal memory regions
     for (start, end) in kernel_phys_mem(kernel_config, kernel_elf) {
-        let res = device_memory.remove_region(start, end);
-        assert!(res.is_ok());
+        device_memory.remove_region(start, end)
+                    .expect(format!("Could not remove region [{:x}..{:x}) from device memory", start, end).as_str());
         normal_memory.insert_region(start, end);
     }
 
     // Remove the kernel image itself
     let self_mem = kernel_self_mem(kernel_elf);
-    normal_memory.remove_region(self_mem.base, self_mem.end);
+    normal_memory.remove_region(self_mem.base, self_mem.end).expect("Could not remove kernel image from normal memory");
 
     // but get the boot region, we'll add that back later
     // FIXME: Why calcaultae it now if we add it back later?
@@ -881,8 +884,10 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
     let device_memory = partial_info.device_memory;
     let boot_region = partial_info.boot_region;
 
-    normal_memory.remove_region(initial_task_phys_region.base, initial_task_phys_region.end);
-    normal_memory.remove_region(reserved_region.base, reserved_region.end);
+    let init_task_removed = normal_memory.remove_region(initial_task_phys_region.base, initial_task_phys_region.end);
+    assert!(init_task_removed.is_ok(), "Could not remove initial task physical region: [{:x}..{:x})", initial_task_phys_region.base, initial_task_phys_region.end);
+    let reserved_removed = normal_memory.remove_region(reserved_region.base, reserved_region.end);
+    assert!(reserved_removed.is_ok(), "Could not remove reserved region: [{:x}..{:x})", reserved_region.base, reserved_region.end);
 
     // Now, the tricky part! determine which memory is used for the initial task objects
     let initial_objects_size = calculate_rootserver_size(initial_task_virt_region);
@@ -937,13 +942,13 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
     }
 }
 
-fn build_system<'a>(kernel_config: KernelConfig,
-                    kernel_elf: ElfFile,
-                    monitor_elf: ElfFile,
-                    system: SystemDescription,
+fn build_system<'a>(kernel_config: &KernelConfig,
+                    kernel_elf: &ElfFile,
+                    monitor_elf: &ElfFile,
+                    system: &'a SystemDescription,
                     invocation_table_size: u64,
                     system_cnode_size: u64,
-                    search_paths: Vec<&str>) -> BuiltSystem<'a> {
+                    search_paths: &Vec<&str>) -> BuiltSystem<'a> {
     assert!(util::is_power_of_two(system_cnode_size));
     assert!(invocation_table_size % kernel_config.minimum_page_size == 0);
     assert!(invocation_table_size <= MAX_SYSTEM_INVOCATION_SIZE);
@@ -988,7 +993,7 @@ fn build_system<'a>(kernel_config: KernelConfig,
 
     // Now that the size is determined, find a free region in the physical memory
     // space.
-    let mut available_memory = emulate_kernel_boot_partial(&kernel_config, &kernel_elf);
+    let mut available_memory = emulate_kernel_boot_partial(kernel_config, kernel_elf);
 
     let reserved_base = available_memory.allocate(reserved_size);
     let initial_task_phys_base = available_memory.allocate(initial_task_size);
@@ -997,7 +1002,7 @@ fn build_system<'a>(kernel_config: KernelConfig,
     assert!(reserved_base < initial_task_phys_base);
 
     let initial_task_phys_region = MemoryRegion::new(initial_task_phys_base, initial_task_phys_base + initial_task_size);
-    let initial_task_virt_region = virt_mem_region_from_elf(&monitor_elf, kernel_config.minimum_page_size);
+    let initial_task_virt_region = virt_mem_region_from_elf(monitor_elf, kernel_config.minimum_page_size);
 
     let reserved_region = MemoryRegion::new(reserved_base, reserved_base + reserved_size);
 
@@ -1006,31 +1011,12 @@ fn build_system<'a>(kernel_config: KernelConfig,
     // all the ELF segments
     let invocation_table_region = MemoryRegion::new(reserved_base, reserved_base + invocation_table_size);
 
-    // let mut phys_addr_next = invocation_table_region.end;
-    // Now we create additional MRs (and mappings) for the ELF files.
-    // let pd_elf_regions: HashMap<&ProtectionDomain, Vec<(u64, Vec<u8>, u8)>> = HashMap::new();
-    // for pd in system.protection_domains {
-    //     let elf_regions = Vec::new();
-    //     let mut seg_idx = 0;
-    //     for segment in pd_elf_files.get(pd).segments: {
-    //         if !segment.loadable {
-    //             continue;
-    //         }
-
-    //         let mut perms = 0;
-    //         if segment.is_readable() {
-    //             perms |= 
-    //         }
-    //     }
-    // }
-
-
     // 1.3 With both the initial task region and reserved region determined the kernel
     // boot can be emulated. This provides the boot info information which is needed
     // for the next steps
     let kernel_boot_info = emulate_kernel_boot(
-        &kernel_config,
-        &kernel_elf,
+        kernel_config,
+        kernel_elf,
         initial_task_phys_region,
         initial_task_virt_region,
         reserved_region
@@ -1305,8 +1291,7 @@ fn build_system<'a>(kernel_config: KernelConfig,
     let mut extra_mrs = Vec::new();
     let mut pd_extra_maps: HashMap<&ProtectionDomain, Vec<SysMap>> = HashMap::new();
     for pd in &system.protection_domains {
-        let mut seg_idx = 0;
-        for segment in &pd_elf_files[pd].segments {
+        for (seg_idx, segment) in pd_elf_files[pd].segments.iter().enumerate() {
             if !segment.loadable {
                 continue;
             }
@@ -1315,7 +1300,7 @@ fn build_system<'a>(kernel_config: KernelConfig,
             regions.push(Region {
                 name: format!("PD-ELF {}-{}", pd.name, seg_idx),
                 addr: segment_phys_addr,
-                data: &segment.data,
+                segment_idx: seg_idx as u64,
             });
 
             let mut perms = 0;
@@ -1340,7 +1325,6 @@ fn build_system<'a>(kernel_config: KernelConfig,
                 page_count: aligned_size / PageSize::Small as u64,
                 phys_addr: Some(phys_addr_next)
             };
-            seg_idx += 1;
             phys_addr_next += aligned_size;
 
             let mp = SysMap {
@@ -1829,7 +1813,7 @@ fn build_system<'a>(kernel_config: KernelConfig,
         }
     }
 
-    for cc in system.channels {
+    for cc in &system.channels {
         let pd_a = cc.pd_a;
         let pd_b = cc.pd_b;
         let pd_a_cnode_obj = cnode_objs_by_pd[pd_a];
@@ -2117,6 +2101,7 @@ fn build_system<'a>(kernel_config: KernelConfig,
         kernel_objects,
         initial_task_phys_region,
         initial_task_virt_region,
+        pd_elf_files,
     }
 }
 
@@ -2151,27 +2136,33 @@ fn main() {
     // let board = "qemu_virt_aarch64";
     // let config = "debug";
 
-    // 1. Parse the arguments
-    // 2. Parse the XML description
-    // 3. Parse the kernel ELF
-    // 4. Construct the kernel config
-    // 5. Parse the monitor ELF
-    // 6. Build the system
-
-    let invocation_table_size = kernel_config.minimum_page_size;
-    let system_cnode_size = 2;
+    let mut invocation_table_size = kernel_config.minimum_page_size;
+    let mut system_cnode_size = 2;
 
     loop {
         let built_system = build_system(
-            kernel_config,
-            kernel_elf,
-            monitor_elf,
-            system,
+            &kernel_config,
+            &kernel_elf,
+            &monitor_elf,
+            &system,
             invocation_table_size,
             system_cnode_size,
-            search_paths
+            &search_paths
         );
-        println!("BUILT: TODO");
-        break;
+        println!("BUILT: system_cnode_size={}, built_system.number_of_system_caps={} invocation_table_size={} built_system.invocation_data_size={}",
+                 system_cnode_size, built_system.number_of_system_caps, invocation_table_size, built_system.invocation_data_size);
+
+        if built_system.number_of_system_caps <= system_cnode_size &&
+           built_system.invocation_data_size <= invocation_table_size {
+            break;
+        }
+
+        // Recalculate the sizes for the next iteration
+        let new_invocation_table_size = util::round_up(built_system.invocation_data_size, kernel_config.minimum_page_size);
+        // TODO: check that the semantics of the Python version
+        let new_system_cnode_size = 2_u32.pow(built_system.number_of_system_caps.next_power_of_two().ilog2());
+
+        invocation_table_size = std::cmp::max(invocation_table_size, new_invocation_table_size) as u64;
+        system_cnode_size = std::cmp::max(system_cnode_size, new_system_cnode_size as u64) as u64;
     }
 }
