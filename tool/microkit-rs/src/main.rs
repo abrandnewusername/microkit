@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
 use elf::ElfFile;
-use sel4::{Invocation, ObjectType, Rights, PageSize};
+use sel4::{Invocation, ObjectType, Rights, PageSize, Aarch64Regs};
 
 const SYMBOL_IPC_BUFFER: &str = "__sel4_ipc_buffer_obj";
 
@@ -573,23 +573,23 @@ impl KernelObjectAllocator {
     }
 }
 
-struct BuiltSystem {
-    // number_of_system_caps: int
-    // invocation_data_size: int
-    // bootstrap_invocations: List[Sel4Invocation]
-    // system_invocations: List[Sel4Invocation]
-    // kernel_boot_info: KernelBootInfo
-    // reserved_region: MemoryRegion
-    // fault_ep_cap_address: int
-    // reply_cap_address: int
-    // cap_lookup: Dict[int, str]
-    // tcb_caps: List[int]
-    // sched_caps: List[int]
-    // ntfn_caps: List[int]
-    // regions: List[Region]
-    // kernel_objects: List[KernelObject]
-    // initial_task_virt_region: MemoryRegion
-    // initial_task_phys_region: MemoryRegion
+struct BuiltSystem<'a> {
+    number_of_system_caps: u64,
+    invocation_data_size: u64,
+    bootstrap_invocations: Vec<Invocation>,
+    system_invocations: Vec<Invocation>,
+    kernel_boot_info: KernelBootInfo,
+    reserved_region: MemoryRegion,
+    fault_ep_cap_address: u64,
+    reply_cap_address: u64,
+    cap_lookup: HashMap<u64, String>,
+    tcb_caps: Vec<u64>,
+    sched_caps: Vec<u64>,
+    ntfn_caps: Vec<u64>,
+    regions: Vec<Region<'a>>,
+    kernel_objects: Vec<KernelObject>,
+    initial_task_virt_region: MemoryRegion,
+    initial_task_phys_region: MemoryRegion
 }
 
 /// Determine the physical memory regions for an ELF file with a given
@@ -809,9 +809,10 @@ impl UntypedObject {
     }
 }
 
+#[derive(Clone)]
 struct KernelBootInfo {
     fixed_cap_count: u64,
-    schedcontrol_cap: u64,
+    sched_control_cap: u64,
     paging_cap_count: u64,
     page_cap_count: u64,
     untyped_objects: Vec<UntypedObject>,
@@ -909,7 +910,7 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
     let paging_cap_count = get_arch_n_paging(initial_task_virt_region);
     let page_cap_count = initial_task_virt_region.size() / kernel_config.minimum_page_size;
     let first_untyped_cap = fixed_cap_count + paging_cap_count + sched_control_cap_count + page_cap_count;
-    let schedcontrol_cap = fixed_cap_count + paging_cap_count;
+    let sched_control_cap = fixed_cap_count + paging_cap_count;
 
     // TODO: this is doing a bunch of unecessary copies
     let device_regions: Vec<MemoryRegion> = [reserved_region.aligned_power_of_two_regions().as_slice(), device_memory.aligned_power_of_two_regions().as_slice()].concat();
@@ -930,13 +931,19 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
         fixed_cap_count,
         paging_cap_count,
         page_cap_count,
-        schedcontrol_cap,
+        sched_control_cap,
         first_available_cap,
         untyped_objects,
     }
 }
 
-fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: ElfFile, system: SystemDescription, invocation_table_size: u64, system_cnode_size: u64, search_paths: Vec<&str>) -> BuiltSystem {
+fn build_system<'a>(kernel_config: KernelConfig,
+                    kernel_elf: ElfFile,
+                    monitor_elf: ElfFile,
+                    system: SystemDescription,
+                    invocation_table_size: u64,
+                    system_cnode_size: u64,
+                    search_paths: Vec<&str>) -> BuiltSystem<'a> {
     assert!(util::is_power_of_two(system_cnode_size));
     assert!(invocation_table_size % kernel_config.minimum_page_size == 0);
     assert!(invocation_table_size <= MAX_SYSTEM_INVOCATION_SIZE);
@@ -963,7 +970,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
                                                     .map(|pd| (pd, ElfFile::from_path(&get_full_path(&pd.program_image, &search_paths).unwrap()).unwrap()))
                                                     .collect();
     // TODO: let's go with this hashmap for now, but unsure if it's the correct method.
-    let pd_elf_files: HashMap<&ProtectionDomain, ElfFile> = elf_files.into_iter().collect();
+    let mut pd_elf_files: HashMap<&ProtectionDomain, ElfFile> = elf_files.into_iter().collect();
 
     // Determine physical memory region for 'reserved' memory.
     //
@@ -972,7 +979,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     // from this area, which can then be made available to the appropriate
     // protection domains
     let mut pd_elf_size = 0;
-    for (_, pd_elf) in pd_elf_files.iter() {
+    for (_, pd_elf) in &pd_elf_files {
         for r in phys_mem_regions_from_elf(pd_elf, kernel_config.minimum_page_size) {
             pd_elf_size += r.size();
         }
@@ -1276,7 +1283,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     bootstrap_invocations.push(map_invocation);
 
     // 3. Now we can start setting up the system based on the information
-    // the user provided in the system xml.
+    // the user provided in the System Description Format.
     //
     // Create all the objects:
     //
@@ -1342,8 +1349,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
                 perms: perms,
                 cached: true,
             };
-            let mut extra_maps_option = pd_extra_maps.get_mut(&pd);
-            if let Some(extra_maps) = extra_maps_option {
+            if let Some(extra_maps) = pd_extra_maps.get_mut(pd) {
                 extra_maps.push(mp);
             } else {
                 pd_extra_maps.insert(pd, vec![mp]);
@@ -1356,7 +1362,13 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     }
 
     // TODO: this is a large copy here
-    let all_mrs = [system.memory_regions, extra_mrs].concat();
+    let mut all_mrs: Vec<SysMemoryRegion> = Vec::new();
+    // [&system.memory_regions, &extra_mrs].iter().map(|set| set.iter().map(|mr| all_mrs.push(mr.clone())));
+    for mr_set in [&system.memory_regions, &extra_mrs] {
+        for mr in mr_set {
+            all_mrs.push(mr.clone());
+        }
+    }
     let all_mr_by_name: HashMap<&str, &SysMemoryRegion> = all_mrs.iter().map(|mr| (mr.name.as_str(), mr)).collect();
 
     let mut system_invocations: Vec<Invocation> = Vec::new();
@@ -1491,7 +1503,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
     let notification_names = system.protection_domains.iter().map(|pd| format!("Notification: PD={}", pd.name)).collect();
     let notification_objs = init_system.allocate_objects(ObjectType::Notification, notification_names, None);
-    let notification_caps = notification_objs.iter().map(|ntfn| ntfn.cap_addr);
+    let notification_caps = notification_objs.iter().map(|ntfn| ntfn.cap_addr).collect();
     let mut notification_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
     system.protection_domains.iter().enumerate().map(|(i, pd)| notification_objs_by_pd.insert(pd, &notification_objs[i]));
 
@@ -1572,6 +1584,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
     system.protection_domains.iter().enumerate().map(|(i, pd)| cnode_objs_by_pd.insert(pd, &cnode_objs[i]));
 
     let mut cap_slot = init_system.cap_slot;
+    let kernel_objects = init_system.objects.clone();
 
     // Create all the necessary interrupt handler objects. These aren't
     // created through retype though!
@@ -1913,8 +1926,7 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
 
     // Associate badges
     // FIXME: This could use repeat
-    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
-        let notification_obj = &notification_objs[pd_idx];
+    for pd in &system.protection_domains {
         for (irq_cap_address, badged_notification_cap_address) in zip(&irq_cap_addresses[pd], &badged_irq_caps[pd]) {
             system_invocations.push(Invocation::IrqHandlerSetNotification {
                 irq_handler: *irq_cap_address,
@@ -1965,7 +1977,147 @@ fn build_system(kernel_config: KernelConfig, kernel_elf: ElfFile, monitor_elf: E
         });
     }
 
-    BuiltSystem {}
+    // Initialise the TCBs
+
+    // Set the scheduling parameters
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        system_invocations.push(Invocation::SchedControlConfigureFlags {
+            sched_control: kernel_boot_info.sched_control_cap,
+            sched_context: sched_context_objs[pd_idx].cap_addr,
+            budget: pd.budget as u64,
+            period: pd.period as u64,
+            extra_refills: 0,
+            badge: 0x100 + pd_idx as u64,
+            flags: 0,
+        });
+    }
+
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        system_invocations.push(Invocation::TcbSetSchedParams {
+            tcb: tcb_objs[pd_idx].cap_addr,
+            authority: INIT_TCB_CAP_ADDRESS,
+            mcp: pd.priority as u64,
+            priority: pd.priority as u64,
+            sched_context: sched_context_objs[pd_idx].cap_addr,
+            fault_ep: fault_ep_endpoint_object.cap_addr,
+        });
+    }
+
+    // Set VSpace and CSpace
+    let mut set_space_invocation = Invocation::TcbSetSpace {
+        tcb: tcb_objs[0].cap_addr,
+        fault_ep: badged_fault_ep,
+        cspace_root: cnode_objs[0].cap_addr,
+        cspace_root_data: kernel_config.cap_address_bits - PD_CAP_BITS,
+        vspace_root: vspace_objs[0].cap_addr,
+        vspace_root_data: 0,
+    };
+    set_space_invocation.repeat(system.protection_domains.len() as u64, Invocation::TcbSetSpace {
+        tcb: 1,
+        fault_ep: 1,
+        cspace_root: 1,
+        cspace_root_data: 0,
+        vspace_root: 1,
+        vspace_root_data: 0,
+    });
+    system_invocations.push(set_space_invocation);
+
+    // Set IPC buffer
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER);
+        system_invocations.push(Invocation::TcbSetIpcBuffer {
+            tcb: tcb_objs[pd_idx].cap_addr,
+            buffer: ipc_buffer_vaddr,
+            buffer_frame: ipc_buffer_objs[pd_idx].cap_addr,
+        });
+    }
+
+    // Set TCB registers (we only set the entry point)
+    for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
+        let mut regs = Aarch64Regs::new();
+        regs.pc = pd_elf_files[pd].entry;
+
+        system_invocations.push(Invocation::TcbWriteRegisters {
+            tcb: tcb_objs[pd_idx].cap_addr,
+            resume: false,
+            // There are no arch-dependent flags to set
+            arch_flags: 0,
+            count: regs.count(),
+            regs: regs,
+        });
+    }
+
+    // Bind the notification object
+    let mut bind_ntfn_invocation = Invocation::TcbBindNotification{
+        tcb: tcb_objs[0].cap_addr,
+        notification: notification_objs[0].cap_addr,
+    };
+    bind_ntfn_invocation.repeat(system.protection_domains.len() as u64, Invocation::TcbBindNotification {
+        tcb: 1,
+        notification: 1,
+    });
+    system_invocations.push(bind_ntfn_invocation);
+
+    // Resume (start) all the threads
+    let mut resume_invocation = Invocation::TcbResume{
+        tcb: tcb_objs[0].cap_addr,
+    };
+    resume_invocation.repeat(system.protection_domains.len() as u64, Invocation::TcbResume {
+        tcb: 1,
+    });
+    system_invocations.push(resume_invocation);
+
+    // All of the objects are created at this point; we don't need both
+    // the allocators from here.
+
+    // And now we are finally done. We have all the invocations
+
+    // TODO: get invocation data
+    let system_invocation_data: Vec<u8> = Vec::new();
+
+    for pd in &system.protection_domains {
+        let elf = pd_elf_files.get_mut(pd).unwrap();
+        elf.write_symbol("microkit_name", pd.name.as_bytes());
+        elf.write_symbol("passive", &[pd.passive as u8]);
+    }
+
+    for pd in &system.protection_domains {
+        for setvar in &pd.setvars {
+            let value;
+            if let Some(region_paddr) = &setvar.region_paddr {
+                let mr = system.memory_regions.iter()
+                                              .find(|mr| mr.name == *region_paddr)
+                                              .expect(format!("Cannot find region: {}", region_paddr).as_str());
+                value = mr_pages[mr][0].phys_addr;
+            } else if let Some(vaddr) = setvar.vaddr {
+                value = vaddr;
+            } else {
+                panic!("Unable to patch variable '{}' in protection domain '{}': variable not found.", setvar.symbol, pd.name);
+            }
+
+            // We assume that all the architectures we are dealing with are little-endian
+            pd_elf_files.get_mut(pd).unwrap().write_symbol(&setvar.symbol, &value.to_le_bytes());
+        }
+    }
+
+    BuiltSystem {
+        number_of_system_caps: final_cap_slot,
+        invocation_data_size: system_invocation_data.len() as u64,
+        bootstrap_invocations: bootstrap_invocations,
+        system_invocations: system_invocations,
+        kernel_boot_info: kernel_boot_info,
+        reserved_region,
+        fault_ep_cap_address: fault_ep_endpoint_object.cap_addr,
+        reply_cap_address: reply_obj.cap_addr,
+        cap_lookup: cap_address_names,
+        tcb_caps,
+        sched_caps: sched_context_caps,
+        ntfn_caps: notification_caps,
+        regions,
+        kernel_objects,
+        initial_task_phys_region,
+        initial_task_virt_region,
+    }
 }
 
 fn main() {

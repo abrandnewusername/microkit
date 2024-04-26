@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use quick_xml::de::Deserializer;
 use serde::{Deserialize};
@@ -63,9 +62,9 @@ pub struct SysIrq {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysSetVar {
-    symbol: String,
-    region_paddr: Option<String>,
-    vaddr: Option<u64>,
+    pub symbol: String,
+    pub region_paddr: Option<String>,
+    pub vaddr: Option<u64>,
 }
 
 #[derive(Debug)]

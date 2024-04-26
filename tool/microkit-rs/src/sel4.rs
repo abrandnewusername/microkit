@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 #[repr(u64)]
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
 pub enum ObjectType {
@@ -141,8 +143,93 @@ enum InvocationLabel {
     ArmIrqIssueIrqHandlerTrigger = 52,
 }
 
+#[derive(Serialize)]
 pub struct Aarch64Regs {
-    pc: u64,
+    pub pc: u64,
+    pub sp: u64,
+    pub spsr: u64,
+    pub x0: u64,
+    pub x1: u64,
+    pub x2: u64,
+    pub x3: u64,
+    pub x4: u64,
+    pub x5: u64,
+    pub x6: u64,
+    pub x7: u64,
+    pub x8: u64,
+    pub x16: u64,
+    pub x17: u64,
+    pub x18: u64,
+    pub x29: u64,
+    pub x30: u64,
+    pub x9: u64,
+    pub x10: u64,
+    pub x11: u64,
+    pub x12: u64,
+    pub x13: u64,
+    pub x14: u64,
+    pub x15: u64,
+    pub x19: u64,
+    pub x20: u64,
+    pub x21: u64,
+    pub x22: u64,
+    pub x23: u64,
+    pub x24: u64,
+    pub x25: u64,
+    pub x26: u64,
+    pub x27: u64,
+    pub x28: u64,
+    pub tpidr_el0: u64,
+    pub tpidrro_el0: u64,
+}
+
+impl Aarch64Regs {
+    // Returns a zero-initialised instance
+    pub fn new() -> Aarch64Regs {
+        Aarch64Regs {
+            pc: 0,
+            sp: 0,
+            spsr: 0,
+            x0: 0,
+            x1: 0,
+            x2: 0,
+            x3: 0,
+            x4: 0,
+            x5: 0,
+            x6: 0,
+            x7: 0,
+            x8: 0,
+            x16: 0,
+            x17: 0,
+            x18: 0,
+            x29: 0,
+            x30: 0,
+            x9: 0,
+            x10: 0,
+            x11: 0,
+            x12: 0,
+            x13: 0,
+            x14: 0,
+            x15: 0,
+            x19: 0,
+            x20: 0,
+            x21: 0,
+            x22: 0,
+            x23: 0,
+            x24: 0,
+            x25: 0,
+            x26: 0,
+            x27: 0,
+            x28: 0,
+            tpidr_el0: 0,
+            tpidrro_el0: 0,
+        }
+    }
+
+    pub fn count(&self) -> u64 {
+        // TODO: hack
+        1
+    }
 }
 
 impl Invocation {
@@ -160,6 +247,14 @@ impl Invocation {
     // TODO: count should probably be usize...
     pub fn repeat(&mut self, _count: u64, _repeat: Invocation) {
         // IMPLEMENT
+        // match self {
+        //     Invocation::CnodeMint => {
+        //         match repeat {
+        //             Invocation::CnodeMint { }
+        //             _ => panic!("cannot repeat")
+        //         }
+        //     }
+        // }
     }
 }
 
@@ -196,10 +291,14 @@ pub enum Invocation {
         buffer: u64,
         buffer_frame: u64,
     },
+    TcbResume {
+        tcb: u64,
+    },
     TcbWriteRegisters {
         tcb: u64,
         resume: bool,
-        arch_flags: u64,
+        arch_flags: u8,
+        count: u64,
         regs: Aarch64Regs,
     },
     TcbBindNotification {
@@ -263,7 +362,7 @@ pub enum Invocation {
         src_depth: u64,
         badge: u64,
     },
-    SchedContextConfigureFlags {
+    SchedControlConfigureFlags {
         sched_control: u64,
         sched_context: u64,
         budget: u64,

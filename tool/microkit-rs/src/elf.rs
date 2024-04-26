@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+// TODO: panic if ELF is not little-endian
+
 #[repr(C, packed)]
 struct ElfHeader32 {
     ident_data: u8,
@@ -22,7 +24,6 @@ struct ElfHeader32 {
     shnum: u16,
     shstrndx: u16,
 }
-
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -126,7 +127,7 @@ enum ElfSegmentAttributes {
 
 pub struct ElfFile {
     word_size: WordSize,
-    entry: u64,
+    pub entry: u64,
     pub segments: Vec<ElfSegment>,
     // TODO: figure out how to have this struct be generic for 64-bit and 32-bit?
     symbols: Vec<(String, ElfSymbol64)>,
@@ -271,6 +272,18 @@ impl ElfFile {
         }
 
         (found_sym.unwrap().value, found_sym.unwrap().size)
+    }
+
+    pub fn write_symbol(&mut self, variable_name: &str, data: &[u8]) {
+        let (vaddr, size) = self.find_symbol(variable_name);
+        for seg in &mut self.segments {
+            if vaddr >= seg.virt_addr && vaddr + size <= seg.virt_addr + seg.data.len() as u64 {
+                let offset = (vaddr - seg.virt_addr) as usize;
+                assert!(data.len() as u64 <= size);
+                seg.data[offset..offset + data.len()].copy_from_slice(data);
+            }
+        }
+        // TODO: panic if we could not write the symbol?
     }
 
     pub fn get_data(&self, vaddr: u64, size: u64) -> Option<&[u8]> {
