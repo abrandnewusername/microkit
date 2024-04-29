@@ -52,10 +52,14 @@ pub fn is_power_of_two(n: u64) -> bool {
     n & (n - 1) == 0
 }
 
-/// mask out (set to zero) the lower bits from n
+/// Mask out (set to zero) the lower bits from n
 pub fn mask_bits(n: u64, bits: u64) -> u64 {
     assert!(n > 0);
     (n >> bits) << bits
+}
+
+pub fn mask(n: u64) -> u64 {
+    (1 << n) - 1
 }
 
 /// Check that all objects in the list are adjacent

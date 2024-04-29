@@ -1,17 +1,23 @@
 use crate::{ElfFile, MemoryRegion};
-use crate::util::{round_up, mb, kb};
+use crate::util::{round_up, mb, kb, mask};
 use crate::elf::ElfWordSize;
 use std::path::Path;
-use std::collections::HashMap;
 
 const PAGE_TABLE_SIZE: usize = 4096;
 
-const AARCH64_1GB_BLOCK_BITS: u8 = 30;
-const AARCH64_2MB_BLOCK_BITS: u8 = 21;
+const AARCH64_1GB_BLOCK_BITS: u64 = 30;
+const AARCH64_2MB_BLOCK_BITS: u64 = 21;
 
-const AARCH64_LVL0_BITS: u8 = 9;
-const AARCH64_LVL1_BITS: u8 = 9;
-const AARCH64_LVL2_BITS: u8 = 9;
+const AARCH64_LVL0_BITS: u64 = 9;
+const AARCH64_LVL1_BITS: u64 = 9;
+const AARCH64_LVL2_BITS: u64 = 9;
+
+struct Aarch64;
+impl Aarch64 {
+    pub fn lvl0_index(addr: u64) -> u64 {
+        ((addr) >> (AARCH64_2MB_BLOCK_BITS + AARCH64_LVL2_BITS + AARCH64_LVL1_BITS)) & mask(AARCH64_LVL0_BITS)
+    }
+}
 
 #[repr(C)]
 struct LoaderRegion64 {
@@ -38,7 +44,6 @@ struct LoaderData64 {
 
 struct Loader {
     magic: u64,
-    elf: ElfFile,
 }
 
 // TODO: why do we have optionals here?
@@ -47,8 +52,8 @@ impl Loader {
                kernel_elf: &ElfFile,
                initial_task_elf: &ElfFile,
                initial_task_phys_base: Option<u64>,
-               reserved_regon: MemoryRegion,
-               regions: Vec<(u64, &[u8])>) -> Loader {
+               reserved_region: MemoryRegion,
+               system_regions: Vec<(u64, &[u8])>) -> Loader {
         // Note: If initial_task_phys_base is not None, then it just this address
         // as the base physical address of the initial task, rather than the address
         // that comes from the initial_task_elf file.
@@ -61,13 +66,6 @@ impl Loader {
             ElfWordSize::ThirtyTwo => 0x5e14dead,
             ElfWordSize::SixtyFour => 0x5e14dead14de5ead,
         };
-
-        let image_segment = elf.segments.iter().find(|segment| segment.loadable).expect("Did not find loadable segment");
-        let image = &image_segment.data;
-
-        if image_segment.virt_addr != elf.entry {
-            panic!("The loader entry point must be the first byte in the image");
-        }
 
         let mut regions = Vec::new();
 
@@ -117,28 +115,56 @@ impl Loader {
             Some(paddr) => paddr,
             None => segment.phys_addr,
         };
+        let inittask_p_v_offset = inittask_first_vaddr - inittask_first_paddr;
 
         // Note: For now we include any zeroes. We could optimize in the future
         regions.push((inittask_first_paddr, &segment.data));
 
         // Determine the pagetable variables
         assert!(kernel_first_vaddr.is_some());
-        assert!(kernel_first_paddr.is_some());
+        assert!(kernel_first_vaddr.is_some());
+        let pagetable_vars = Loader::setup_pagetables(&elf, kernel_first_vaddr.unwrap(), kernel_first_paddr.unwrap());
 
-        let mut loader = Loader {
+        let mut image_segment = elf.segments.into_iter().find(|segment| segment.loadable).expect("Did not find loadable segment");
+        let image = &mut image_segment.data;
+
+        if image_segment.virt_addr != elf.entry {
+            panic!("The loader entry point must be the first byte in the image");
+        }
+
+        for (var_addr, var_size, var_data) in pagetable_vars {
+            let offset = var_addr - image_segment.virt_addr;
+            assert!(var_size == var_data.len() as u64);
+            assert!(offset > 0);
+            assert!(offset <= image.len() as u64);
+            image[offset as usize..(offset + var_size) as usize].copy_from_slice(&var_data);
+        }
+
+        let kernel_entry = kernel_elf.entry;
+
+        // TODO: don't we already have inittask_p_v_offset? I'm confused
+        let pv_offset = inittask_first_paddr - inittask_first_vaddr;
+
+        let ui_p_reg_start = inittask_first_paddr;
+        let ui_p_reg_end = inittask_last_vaddr - inittask_p_v_offset;
+        assert!(ui_p_reg_end > ui_p_reg_start);
+
+        let v_entry = initial_task_elf.entry;
+
+        let extra_device_addr_p = reserved_region.base;
+        let extra_device_size = reserved_region.size();
+
+        // let all_regions = [regions, system_regions].concat();
+
+        Loader {
             magic,
-            elf
-        };
-
-        let pagetable_vars = loader.setup_pagetables(kernel_first_vaddr.unwrap(), kernel_first_paddr.unwrap());
-
-        loader
+        }
     }
 
-    fn setup_pagetables(&mut self, first_vaddr: u64, first_paddr: u64) -> HashMap<&str, [u8; PAGE_TABLE_SIZE]> {
-        let (boot_lvl1_lower_addr, _) = self.elf.find_symbol("boot_lvl1_lower");
-        let (boot_lvl1_upper_addr, _) = self.elf.find_symbol("boot_lvl1_upper");
-        let (boot_lvl2_upper_addr, _) = self.elf.find_symbol("boot_lvl2_upper");
+    fn setup_pagetables(elf: &ElfFile, first_vaddr: u64, first_paddr: u64) -> [(u64, u64, [u8; PAGE_TABLE_SIZE]); 1] {
+        let (boot_lvl1_lower_addr, boot_lvl1_lower_size) = elf.find_symbol("boot_lvl1_lower");
+        let (boot_lvl1_upper_addr, _) = elf.find_symbol("boot_lvl1_upper");
+        let (boot_lvl2_upper_addr, _) = elf.find_symbol("boot_lvl2_upper");
 
         let mut boot_lvl0_lower: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
         boot_lvl0_lower[..8].copy_from_slice(&(boot_lvl1_lower_addr | 3).to_le_bytes());
@@ -150,15 +176,21 @@ impl Loader {
                 (1 << 10) | // access flag
                 (0 << 2) | // strongly ordered memory
                 (1); // 1G block
-            // boot_lvl1_lower[8 * i..8 * (i + 1)].copy_from_slice(&pt_entry.to_le_bytes());
+            let start = 8 * i as usize;
+            let end = 8 * (i as usize + 1);
+            boot_lvl1_lower[start..end].copy_from_slice(&pt_entry.to_le_bytes());
         }
 
-        HashMap::from([
-            ("boot_lvl0_lower", boot_lvl0_lower),
+        let mut boot_lvl0_upper: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
+        let pt_entry = boot_lvl1_upper_addr | 3;
+        let idx = Aarch64::lvl0_index(first_vaddr);
+
+        [
+            (boot_lvl1_lower_addr, boot_lvl1_lower_size, boot_lvl0_lower),
             // ("boot_lvl1_lower", boot_lvl1_lower),
             // ("boot_lvl0_upper", boot_lvl0_upper),
             // ("boot_lvl1_upper", boot_lvl1_upper),
             // ("boot_lvl2_upper", boot_lvl2_upper),
-        ])
+        ]
     }
 }
