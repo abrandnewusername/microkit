@@ -2,6 +2,8 @@ use crate::{ElfFile, MemoryRegion};
 use crate::util::{round_up, mb, kb, mask};
 use crate::elf::ElfWordSize;
 use std::path::Path;
+use std::fs::File;
+use std::io::Write;
 
 const PAGE_TABLE_SIZE: usize = 4096;
 
@@ -17,6 +19,40 @@ impl Aarch64 {
     pub fn lvl0_index(addr: u64) -> u64 {
         ((addr) >> (AARCH64_2MB_BLOCK_BITS + AARCH64_LVL2_BITS + AARCH64_LVL1_BITS)) & mask(AARCH64_LVL0_BITS)
     }
+
+    pub fn lvl1_index(addr: u64) -> u64 {
+        ((addr) >> (AARCH64_2MB_BLOCK_BITS + AARCH64_LVL2_BITS)) & mask(AARCH64_LVL1_BITS)
+    }
+
+    pub fn lvl2_index(addr: u64) -> u64 {
+        ((addr) >> (AARCH64_2MB_BLOCK_BITS)) & mask(AARCH64_LVL2_BITS)
+    }
+}
+
+/// Checks that each region in the given list does not overlap with any other region.
+/// Panics upon finding an overlapping region
+fn check_non_overlapping(regions: &Vec<(u64, &[u8])>) {
+    // TODO: this might be able to be done better in a more Rust-idiomatic way
+    let mut checked: Vec<(u64, u64)> = Vec::new();
+    for (base, data) in regions {
+        let end = base + data.len() as u64;
+        // Check that this does not overlap with any checked regions
+        for (b, e) in &checked {
+            if !(end <= *b || *base >= *e) {
+                panic!("Overlapping regions: [{:x}..{:x}) overlaps [{:x}..{:x})", base, end, b, e);
+            }
+        }
+
+        checked.push((*base, end));
+    }
+}
+
+// TODO: get rid of this and do it all inline
+unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    ::core::slice::from_raw_parts(
+        (p as *const T) as *const u8,
+        ::core::mem::size_of::<T>(),
+    )
 }
 
 #[repr(C)]
@@ -28,7 +64,7 @@ struct LoaderRegion64 {
 }
 
 #[repr(C)]
-struct LoaderData64 {
+struct LoaderHeader64 {
     magic: u64,
     flags: u64,
     kernel_entry: u64,
@@ -39,21 +75,23 @@ struct LoaderData64 {
     extra_device_addr_p: u64,
     extra_device_size: u64,
     num_regions: u64,
-    regions: [LoaderRegion64],
 }
 
-struct Loader {
-    magic: u64,
+struct Loader<'a> {
+    image: Vec<u8>,
+    header: LoaderHeader64,
+    region_metadata: Vec<LoaderRegion64>,
+    regions: Vec<(u64, &'a [u8])>,
 }
 
 // TODO: why do we have optionals here?
-impl Loader {
+impl<'a> Loader<'a> {
     pub fn new(loader_elf_path: &Path,
-               kernel_elf: &ElfFile,
-               initial_task_elf: &ElfFile,
+               kernel_elf: &'a ElfFile,
+               initial_task_elf: &'a ElfFile,
                initial_task_phys_base: Option<u64>,
                reserved_region: MemoryRegion,
-               system_regions: Vec<(u64, &[u8])>) -> Loader {
+               system_regions: Vec<(u64, &'a [u8])>) -> Loader<'a> {
         // Note: If initial_task_phys_base is not None, then it just this address
         // as the base physical address of the initial task, rather than the address
         // that comes from the initial_task_elf file.
@@ -94,7 +132,7 @@ impl Loader {
                     panic!("Kernel does not have a consistent physical to virtual offset");
                 }
 
-                regions.push((segment.phys_addr, &segment.data));
+                regions.push((segment.phys_addr, segment.data.as_slice()));
             }
         }
 
@@ -125,15 +163,16 @@ impl Loader {
         assert!(kernel_first_vaddr.is_some());
         let pagetable_vars = Loader::setup_pagetables(&elf, kernel_first_vaddr.unwrap(), kernel_first_paddr.unwrap());
 
-        let mut image_segment = elf.segments.into_iter().find(|segment| segment.loadable).expect("Did not find loadable segment");
-        let image = &mut image_segment.data;
+        let image_segment = elf.segments.into_iter().find(|segment| segment.loadable).expect("Did not find loadable segment");
+        let image_vaddr = image_segment.virt_addr;
+        let mut image = image_segment.data;
 
-        if image_segment.virt_addr != elf.entry {
+        if image_vaddr != elf.entry {
             panic!("The loader entry point must be the first byte in the image");
         }
 
         for (var_addr, var_size, var_data) in pagetable_vars {
-            let offset = var_addr - image_segment.virt_addr;
+            let offset = var_addr - image_vaddr;
             assert!(var_size == var_data.len() as u64);
             assert!(offset > 0);
             assert!(offset <= image.len() as u64);
@@ -154,17 +193,84 @@ impl Loader {
         let extra_device_addr_p = reserved_region.base;
         let extra_device_size = reserved_region.size();
 
-        // let all_regions = [regions, system_regions].concat();
+        let mut all_regions = Vec::new();
+        for region_set in [regions, system_regions] {
+            for r in region_set {
+                all_regions.push(r);
+            }
+        }
+
+        check_non_overlapping(&all_regions);
+
+        // FIXME: Should be a way to determine if seL4 needs hypervisor mode or not
+        let flags = 0;
+
+        let header = LoaderHeader64 {
+            magic,
+            flags,
+            kernel_entry,
+            ui_p_reg_start,
+            ui_p_reg_end,
+            pv_offset,
+            v_entry,
+            extra_device_addr_p,
+            extra_device_size,
+            num_regions: all_regions.len() as u64,
+        };
+
+        let mut region_metadata = Vec::new();
+        let mut offset: u64 = 0;
+        for (addr, data) in &all_regions {
+            region_metadata.push(LoaderRegion64 {
+                load_addr: *addr,
+                size: data.len() as u64,
+                offset,
+                r#type: 1,
+            });
+            offset += data.len() as u64;
+        }
 
         Loader {
-            magic,
+            image,
+            header,
+            region_metadata,
+            regions: all_regions,
         }
     }
 
-    fn setup_pagetables(elf: &ElfFile, first_vaddr: u64, first_paddr: u64) -> [(u64, u64, [u8; PAGE_TABLE_SIZE]); 1] {
+    pub fn write(&self, path: &Path) {
+        let mut loader_file = match File::create(path) {
+            Ok(file) => file,
+            Err(e) => panic!("Could not create '{}': {}", path.display(), e),
+        };
+
+        // First write out all the image data
+        loader_file.write_all(self.image.as_slice());
+
+        // Then we write out the loader metadata (known as the 'header')
+        let mut offset = 0;
+        let header_bytes = unsafe { any_as_u8_slice(&self.header) };
+        loader_file.write_all(header_bytes);
+        // For each region, we need to write out the region metadata as well
+        for region in &self.region_metadata {
+            let region_metadata_bytes = unsafe { any_as_u8_slice(region) };
+            loader_file.write_all(region_metadata_bytes);
+        }
+
+        // Now we can write out all the region data
+        for (_, data) in &self.regions {
+            loader_file.write_all(data);
+        }
+    }
+
+    // TODO: this function is complicated and takes me a while to understand
+    // everytime I read it so it must be commented sufficiently
+    fn setup_pagetables(elf: &ElfFile, first_vaddr: u64, first_paddr: u64) -> [(u64, u64, [u8; PAGE_TABLE_SIZE]); 5] {
         let (boot_lvl1_lower_addr, boot_lvl1_lower_size) = elf.find_symbol("boot_lvl1_lower");
-        let (boot_lvl1_upper_addr, _) = elf.find_symbol("boot_lvl1_upper");
-        let (boot_lvl2_upper_addr, _) = elf.find_symbol("boot_lvl2_upper");
+        let (boot_lvl1_upper_addr, boot_lvl1_upper_size) = elf.find_symbol("boot_lvl1_upper");
+        let (boot_lvl2_upper_addr, boot_lvl2_upper_size) = elf.find_symbol("boot_lvl2_upper");
+        let (boot_lvl0_lower_addr, boot_lvl0_lower_size) = elf.find_symbol("boot_lvl0_lower");
+        let (boot_lvl0_upper_addr, boot_lvl0_upper_size) = elf.find_symbol("boot_lvl0_upper");
 
         let mut boot_lvl0_lower: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
         boot_lvl0_lower[..8].copy_from_slice(&(boot_lvl1_lower_addr | 3).to_le_bytes());
@@ -176,21 +282,50 @@ impl Loader {
                 (1 << 10) | // access flag
                 (0 << 2) | // strongly ordered memory
                 (1); // 1G block
+            // TODO: ugly casting here
             let start = 8 * i as usize;
             let end = 8 * (i as usize + 1);
             boot_lvl1_lower[start..end].copy_from_slice(&pt_entry.to_le_bytes());
         }
 
         let mut boot_lvl0_upper: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
-        let pt_entry = boot_lvl1_upper_addr | 3;
-        let idx = Aarch64::lvl0_index(first_vaddr);
+        {
+            let pt_entry = (boot_lvl1_upper_addr | 3).to_le_bytes();
+            let idx = Aarch64::lvl0_index(first_vaddr) as usize;
+            boot_lvl0_upper[8 * idx..8 * (idx + 1)].copy_from_slice(&pt_entry);
+        }
+
+        let mut boot_lvl1_upper: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
+        {
+            let pt_entry = (boot_lvl2_upper_addr | 3).to_le_bytes();
+            let idx = Aarch64::lvl1_index(first_vaddr) as usize;
+            boot_lvl1_upper[8 * idx..8 * (idx + 1)].copy_from_slice(&pt_entry);
+        }
+
+        // TODO: this code could be neater
+        let mut boot_lvl2_upper: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
+        let lvl2_idx = Aarch64::lvl2_index(first_vaddr);
+        let mut paddr = first_paddr;
+        for i in lvl2_idx..512 {
+            // TODO: check and expand these comments
+            let pt_entry: u64 =
+                paddr |
+                (1 << 10) | // Access flag
+                (3 << 8) | // Make sure the shareability is the same as the kernel's
+                (4 << 2) | // MT_NORMAL memory
+                (1 << 0); // 2MB block
+            paddr += 1 << AARCH64_2MB_BLOCK_BITS;
+            let start = 8 * i as usize;
+            let end = 8 * (i + 1) as usize;
+            boot_lvl2_upper[start..end].copy_from_slice(&pt_entry.to_le_bytes());
+        }
 
         [
-            (boot_lvl1_lower_addr, boot_lvl1_lower_size, boot_lvl0_lower),
-            // ("boot_lvl1_lower", boot_lvl1_lower),
-            // ("boot_lvl0_upper", boot_lvl0_upper),
-            // ("boot_lvl1_upper", boot_lvl1_upper),
-            // ("boot_lvl2_upper", boot_lvl2_upper),
+            (boot_lvl0_lower_addr, boot_lvl0_lower_size, boot_lvl0_lower),
+            (boot_lvl1_lower_addr, boot_lvl1_lower_size, boot_lvl1_lower),
+            (boot_lvl0_upper_addr, boot_lvl0_upper_size, boot_lvl0_upper),
+            (boot_lvl1_upper_addr, boot_lvl1_upper_size, boot_lvl1_upper),
+            (boot_lvl2_upper_addr, boot_lvl2_upper_size, boot_lvl2_upper),
         ]
     }
 }

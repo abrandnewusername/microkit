@@ -62,7 +62,7 @@ const INIT_ASID_POOL_CAP_ADDRESS: u64 = 6;
 /// The cap_address is is intended to be valid within the context of the
 /// initial task.
 #[derive(Clone)]
-struct KernelObject {
+pub struct KernelObject {
     name: String,
     /// Type of kernel object
     object_type: ObjectType,
@@ -2165,4 +2165,11 @@ fn main() {
         invocation_table_size = std::cmp::max(invocation_table_size, new_invocation_table_size) as u64;
         system_cnode_size = std::cmp::max(system_cnode_size, new_system_cnode_size as u64) as u64;
     }
+
+    // Generate the report
+    let report_path = "report.txt";
+    let report = match std::fs::File::create(report_path) {
+        Ok(file) => file,
+        Err(e) => panic!("Could not create report file '{}': {}", report_path, e),
+    };
 }
