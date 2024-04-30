@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
 use elf::ElfFile;
 use sel4::{Invocation, ObjectType, Rights, PageSize, Aarch64Regs};
+use std::io::{Write, BufWriter};
 
 const SYMBOL_IPC_BUFFER: &str = "__sel4_ipc_buffer_obj";
 
@@ -2139,8 +2140,9 @@ fn main() {
     let mut invocation_table_size = kernel_config.minimum_page_size;
     let mut system_cnode_size = 2;
 
+    let mut built_system;
     loop {
-        let built_system = build_system(
+        built_system = build_system(
             &kernel_config,
             &kernel_elf,
             &monitor_elf,
@@ -2172,4 +2174,11 @@ fn main() {
         Ok(file) => file,
         Err(e) => panic!("Could not create report file '{}': {}", report_path, e),
     };
+
+    let mut report_buf = BufWriter::new(report);
+    report_buf.write(b"# Kernel Boot Info\n\n");
+
+    writeln!(&mut report_buf, "    # of fixed caps     : {}\n", built_system.kernel_boot_info.fixed_cap_count);
+
+    report_buf.flush().unwrap();
 }
