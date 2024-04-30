@@ -6,6 +6,7 @@ mod loader;
 
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
@@ -170,6 +171,7 @@ impl<'a> InitSystem<'a> {
         assert!(phys_address >= self.last_fixed_address);
         assert!(object_type.fixed_size().is_some());
         assert!(count == names.len() as u64);
+        assert!(count > 0);
 
         let alloc_size = object_type.fixed_size().unwrap();
         // Find an untyped that contains the given address
@@ -255,6 +257,11 @@ impl<'a> InitSystem<'a> {
     pub fn allocate_objects(&mut self, object_type: ObjectType, names: Vec<String>, size: Option<u64>) -> Vec<KernelObject> {
         let count = names.len() as u64;
 
+        // TODO: kinda hacky
+        if count == 0 {
+            return Vec::new();
+        }
+
         let alloc_size;
         let api_size: u64;
         if let Some(object_size) = object_type.fixed_size() {
@@ -296,6 +303,7 @@ impl<'a> InitSystem<'a> {
 
         let mut kernel_objects = Vec::new();
         let mut phys_addr = allocation.phys_addr;
+        println!("object_type: {:?}, phys_addr: 0x{:x}", object_type, phys_addr);
         for idx in 0..count {
             let cap_slot = base_cap_slot + idx;
             let cap_addr = self.cnode_mask | cap_slot;
@@ -323,7 +331,16 @@ impl<'a> InitSystem<'a> {
 struct Region {
     name: String,
     addr: u64,
+    size: u64,
     segment_idx: u64,
+}
+
+
+impl fmt::Display for Region {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: report segment idx?
+        write!(f, "<Region name={} addr=0x{:x} size={}>", self.name, self.addr, self.size)
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -333,6 +350,13 @@ struct MemoryRegion {
     /// and cover [1, 2, 3, 4]
     base: u64,
     end: u64,
+}
+
+impl fmt::Display for MemoryRegion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: could be more consistent with Region?
+        write!(f, "MemoryRegion(base=0x{:x}, end=0x{:x})", self.base, self.end)
+    }
 }
 
 impl MemoryRegion {
@@ -563,13 +587,17 @@ impl KernelObjectAllocator {
 
     pub fn alloc_n(&mut self, size: u64, count: u64) -> KernelAllocation {
         assert!(util::is_power_of_two(size));
+        assert!(count > 0);
         for ut in &mut self.untyped {
             // See if this fits
             let start = util::round_up(ut.base() + ut.allocation_point, size);
-            self.allocation_idx += 1;
-            let allocation = KernelAllocation::new(ut.untyped_object.cap, start, self.allocation_idx);
-            ut.allocations.push(allocation);
-            return allocation;
+            if start + (count * size) <= ut.end() {
+                ut.allocation_point = (start - ut.base()) + (count * size);
+                self.allocation_idx += 1;
+                let allocation = KernelAllocation::new(ut.untyped_object.cap, start, self.allocation_idx);
+                ut.allocations.push(allocation);
+                return allocation;
+            }
         }
 
         panic!("Can't alloc of size {}, count: {} - no space", size, count);
@@ -1301,6 +1329,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
             regions.push(Region {
                 name: format!("PD-ELF {}-{}", pd.name, seg_idx),
                 addr: segment_phys_addr,
+                size: segment.data.len() as u64,
                 segment_idx: seg_idx as u64,
             });
 
@@ -1471,7 +1500,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     let pp_protection_domains: Vec<&ProtectionDomain> = system.protection_domains.iter().filter(|pd| pd.pp).collect();
 
     // TODO: this logic could be a bit cleaner...
-    let pd_endpoint_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("EP: PD={}", pd.name)).collect();
+    let pd_endpoint_names: Vec<String> = pp_protection_domains.iter().map(|pd| format!("EP: PD={}", pd.name)).collect();
     let endpoint_names = [vec![format!("EP: Monitor Fault")], pd_endpoint_names].concat();
 
     let pd_reply_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("Reply: PD={}", pd.name)).collect();
@@ -2168,6 +2197,9 @@ fn main() {
         system_cnode_size = std::cmp::max(system_cnode_size, new_system_cnode_size as u64) as u64;
     }
 
+    let bootstrap_invocation_data: Vec<u8> = Vec::new();
+    let system_invocation_data: Vec<u8> = Vec::new();
+
     // Generate the report
     let report_path = "report.txt";
     let report = match std::fs::File::create(report_path) {
@@ -2178,7 +2210,32 @@ fn main() {
     let mut report_buf = BufWriter::new(report);
     report_buf.write(b"# Kernel Boot Info\n\n");
 
-    writeln!(&mut report_buf, "    # of fixed caps     : {}\n", built_system.kernel_boot_info.fixed_cap_count);
+    // TODO: need to match formatting with Python
+    writeln!(&mut report_buf, "    # of fixed caps     : {:>8}", built_system.kernel_boot_info.fixed_cap_count);
+    writeln!(&mut report_buf, "    # of page table caps: {:>8}", built_system.kernel_boot_info.paging_cap_count);
+    writeln!(&mut report_buf, "    # of page caps      : {:>8}", built_system.kernel_boot_info.page_cap_count);
+    writeln!(&mut report_buf, "    # of untyped objects: {:>8}", built_system.kernel_boot_info.untyped_objects.len());
+    writeln!(&mut report_buf, "\n# Loader Regions\n");
+    for region in built_system.regions {
+        writeln!(&mut report_buf, "       {}", region);
+    }
+    writeln!(&mut report_buf, "\n# Monitor (Initial Task) Info\n");
+    writeln!(&mut report_buf, "     virtual memory : {}", built_system.initial_task_virt_region);
+    writeln!(&mut report_buf, "     physical memory: {}", built_system.initial_task_phys_region);
+    writeln!(&mut report_buf, "\n# Allocated Kernel Objects Summary\n");
+    writeln!(&mut report_buf, "     # of allocated objects: {}", built_system.kernel_objects.len());
+    writeln!(&mut report_buf, "\n# Bootstrap Kernel Invocations Summary\n");
+    writeln!(&mut report_buf, "     # of invocations   : {:>10}", built_system.bootstrap_invocations.len());
+    writeln!(&mut report_buf, "     size of invocations: {:>10}", bootstrap_invocation_data.len());
+    writeln!(&mut report_buf, "\n# System Kernel Invocations Summary\n");
+    writeln!(&mut report_buf, "     # of invocations   : {:>10}", built_system.system_invocations.len());
+    writeln!(&mut report_buf, "     size of invocations: {:>10}", system_invocation_data.len());
+    writeln!(&mut report_buf, "\n# Allocated Kernel Objects Detail\n");
+    for ko in &built_system.kernel_objects {
+        // TODO: don't use debug display for object type
+        // TODO: would be good to print both the number for the object type and the string
+        writeln!(&mut report_buf, "    {:<50} {} cap_addr={:x} phys_addr={:x}", ko.name, ko.object_type as u64, ko.cap_addr, ko.phys_addr);
+    }
 
     report_buf.flush().unwrap();
 }
