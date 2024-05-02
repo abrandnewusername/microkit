@@ -13,6 +13,7 @@ use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, Sy
 use elf::ElfFile;
 use sel4::{Invocation, ObjectType, Rights, PageSize, Aarch64Regs};
 use std::io::{Write, BufWriter};
+use std::mem::size_of;
 
 const SYMBOL_IPC_BUFFER: &str = "__sel4_ipc_buffer_obj";
 
@@ -53,6 +54,38 @@ const INIT_ASID_POOL_CAP_ADDRESS: u64 = 6;
 // const SMMU_SID_CONTROL_CAP_ADDRESS: u64 = 12;
 // const SMMU_CB_CONTROL_CAP_ADDRESS: u64 = 13;
 // const INIT_THREAD_SC_CAP_ADDRESS: u64 = 14;
+
+/// Corresponds to 'struct untyped_info' in the monitor
+/// It should be noted that this is called a 'header' since
+/// it omits the 'regions' field.
+/// This struct assumes a 64-bit target
+#[repr(C)]
+struct MonitorUntypedInfoHeader64 {
+    cap_start: u64,
+    cap_end: u64,
+}
+
+/// Corresponds to 'struct region' in the monitor
+/// This struct assumes a 64-bit target
+#[repr(C)]
+struct MonitorRegion64 {
+    paddr: u64,
+    size_bits: u64,
+    is_device: u64,
+}
+
+struct MonitorConfig {
+    untyped_info_symbol_name: &'static str,
+    bootstrap_invocation_count_symbol_name: &'static str,
+    bootstrap_invocation_data_symbol_name: &'static str,
+    system_invocation_count_symbol_name: &'static str,
+}
+
+impl MonitorConfig {
+    pub fn max_untyped_objects(&self, symbol_size: u64) -> u64 {
+        (symbol_size - size_of::<MonitorUntypedInfoHeader64>() as u64) / size_of::<MonitorRegion64>() as u64
+    }
+}
 
 /// Represents an allocated kernel object.
 ///
@@ -707,7 +740,7 @@ fn kernel_device_addrs(kernel_config: &KernelConfig, kernel_elf: &ElfFile) -> Ve
     let (vaddr, size) = kernel_elf.find_symbol("kernel_device_frames");
     // TODO: don't unwrap
     let kernel_frame_bytes = kernel_elf.get_data(vaddr, size).unwrap();
-    let kernel_frame_size = std::mem::size_of::<KernelFrame64>();
+    let kernel_frame_size = size_of::<KernelFrame64>();
     let mut offset: usize = 0;
     while offset < size as usize {
         // TODO: check result of align_to
@@ -735,7 +768,7 @@ fn kernel_phys_mem(kernel_config: &KernelConfig, kernel_elf: &ElfFile) -> Vec<(u
     let (vaddr, size) = kernel_elf.find_symbol("avail_p_regs");
         // TODO: don't unwrap
     let p_region_bytes = kernel_elf.get_data(vaddr, size).unwrap();
-    let p_region_size = std::mem::size_of::<KernelRegion64>();
+    let p_region_size = size_of::<KernelRegion64>();
     let mut offset: usize = 0;
     while offset < size as usize {
         // TODO: check result of align_to
@@ -2154,11 +2187,24 @@ fn main() {
         fan_out_limit: 256,
     };
 
+    let monitor_config = MonitorConfig {
+        untyped_info_symbol_name: "untyped_info",
+        bootstrap_invocation_count_symbol_name: "bootstrap_invocation_count",
+        bootstrap_invocation_data_symbol_name: "bootstrap_invocation_data",
+        system_invocation_count_symbol_name: "system_invocation_count",
+    };
+
+    let monitor_elf_path = "testing/monitor.elf";
+
     // TODO: need to test what happens when these paths do not exist
     // and do error checking.
     let kernel_elf = ElfFile::from_path(Path::new("testing/sel4.elf")).unwrap();
-    let monitor_elf = ElfFile::from_path(Path::new("testing/monitor.elf")).unwrap();
+    let monitor_elf = ElfFile::from_path(Path::new(monitor_elf_path)).unwrap();
     // let loader_elf = ElfFile::from_path(Path::new("testing/loader.elf")).unwrap();
+
+    if monitor_elf.segments.len() > 1 {
+        panic!("Monitor ({}) has {} segments, it must only have one", monitor_elf_path, monitor_elf.segments.len());
+    }
 
     let search_paths = vec!["testing"];
 
@@ -2196,6 +2242,36 @@ fn main() {
         invocation_table_size = std::cmp::max(invocation_table_size, new_invocation_table_size) as u64;
         system_cnode_size = std::cmp::max(system_cnode_size, new_system_cnode_size as u64) as u64;
     }
+
+    // At this point we just need to patch the files (in memory) and write out the final image.
+
+    // A: The monitor
+
+    // A.1: As part of emulated boot we determined exactly how the kernel would
+    // create untyped objects. Throught testing we know that this matches, but
+    // we could have a bug, or the kernel could change. It that happens we are
+    // in a bad spot! Things will break. So we write out this information so that
+    // the monitor can double check this at run time.
+    let (_, untyped_info_size) = monitor_elf.find_symbol(monitor_config.untyped_info_symbol_name);
+    let max_untyped_objects = monitor_config.max_untyped_objects(untyped_info_size);
+    if built_system.kernel_boot_info.untyped_objects.len() as u64 > max_untyped_objects {
+        // TODO: comma separator missing in panic
+        panic!("Too many untyped objects: monitor ({}) supports {} regions. System has {} objects.",
+              monitor_elf_path, max_untyped_objects, built_system.kernel_boot_info.untyped_objects.len());
+    }
+
+    let untyped_info_header = MonitorUntypedInfoHeader64 {
+        cap_start: built_system.kernel_boot_info.untyped_objects[0].cap,
+        cap_end: built_system.kernel_boot_info.untyped_objects.last().unwrap().cap + 1,
+    };
+    let untyped_info_object_data: Vec<MonitorRegion64> = built_system.kernel_boot_info.untyped_objects
+                                                        .iter()
+                                                        .map(|ut| MonitorRegion64 {
+                                                            paddr: ut.base(),
+                                                            size_bits: ut.size_bits(),
+                                                            is_device: ut.is_device as u64,
+                                                        })
+                                                        .collect();
 
     let bootstrap_invocation_data: Vec<u8> = Vec::new();
     let system_invocation_data: Vec<u8> = Vec::new();
