@@ -172,7 +172,7 @@ impl ElfFile {
         let entry = hdr.entry;
 
         // Read all the segments
-        let mut segments = Vec::new();
+        let mut segments = Vec::with_capacity(hdr.phnum as usize);
         for i in 0..hdr.phnum {
             let phent_start = hdr.phoff + (i * hdr.phentsize) as u64;
             let phent_end = phent_start + (hdr.phentsize as u64);
@@ -198,7 +198,7 @@ impl ElfFile {
         }
 
         // Read all the section headers
-        let mut shents = Vec::new();
+        let mut shents = Vec::with_capacity(hdr.shnum as usize);
         let mut symtab_shent: Option<&ElfSectionHeader64> = None;
         let mut shstrtab_shent: Option<&ElfSectionHeader64> = None;
         for i in 0..hdr.shnum {

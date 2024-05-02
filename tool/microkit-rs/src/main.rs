@@ -1392,14 +1392,13 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     }
 
     // TODO: this is a large copy here
-    let mut all_mrs: Vec<SysMemoryRegion> = Vec::new();
-    // [&system.memory_regions, &extra_mrs].iter().map(|set| set.iter().map(|mr| all_mrs.push(mr.clone())));
+    let mut all_mrs: Vec<&SysMemoryRegion> = Vec::with_capacity(system.memory_regions.len() + extra_mrs.len());
     for mr_set in [&system.memory_regions, &extra_mrs] {
         for mr in mr_set {
-            all_mrs.push(mr.clone());
+            all_mrs.push(mr);
         }
     }
-    let all_mr_by_name: HashMap<&str, &SysMemoryRegion> = all_mrs.iter().map(|mr| (mr.name.as_str(), mr)).collect();
+    let all_mr_by_name: HashMap<&str, &SysMemoryRegion> = all_mrs.iter().map(|mr| (mr.name.as_str(), *mr)).collect();
 
     let mut system_invocations: Vec<Invocation> = Vec::new();
     let mut init_system = InitSystem::new(

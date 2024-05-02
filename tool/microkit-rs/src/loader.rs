@@ -3,7 +3,7 @@ use crate::util::{round_up, mb, kb, mask, any_as_u8_slice};
 use crate::elf::ElfWordSize;
 use std::path::Path;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 const PAGE_TABLE_SIZE: usize = 4096;
 
@@ -236,22 +236,26 @@ impl<'a> Loader<'a> {
             Err(e) => panic!("Could not create '{}': {}", path.display(), e),
         };
 
+        let mut loader_buf = BufWriter::new(loader_file);
+
         // First write out all the image data
-        loader_file.write_all(self.image.as_slice()).expect("Failed to write image data to loader");
+        loader_buf.write(self.image.as_slice()).expect("Failed to write image data to loader");
 
         // Then we write out the loader metadata (known as the 'header')
         let header_bytes = unsafe { any_as_u8_slice(&self.header) };
-        loader_file.write_all(header_bytes).expect("Failed to write header data to loader");
+        loader_buf.write(header_bytes).expect("Failed to write header data to loader");
         // For each region, we need to write out the region metadata as well
         for region in &self.region_metadata {
             let region_metadata_bytes = unsafe { any_as_u8_slice(region) };
-            loader_file.write_all(region_metadata_bytes).expect("Failed to write region metadata to loader");
+            loader_buf.write(region_metadata_bytes).expect("Failed to write region metadata to loader");
         }
 
         // Now we can write out all the region data
         for (_, data) in &self.regions {
-            loader_file.write_all(data).expect("Failed to write region data to loader");
+            loader_buf.write(data).expect("Failed to write region data to loader");
         }
+
+        loader_buf.flush().unwrap();
     }
 
     // TODO: this function is complicated and takes me a while to understand
