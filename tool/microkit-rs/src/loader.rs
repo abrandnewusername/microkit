@@ -1,5 +1,5 @@
 use crate::{ElfFile, MemoryRegion};
-use crate::util::{round_up, mb, kb, mask};
+use crate::util::{round_up, mb, kb, mask, any_as_u8_slice};
 use crate::elf::ElfWordSize;
 use std::path::Path;
 use std::fs::File;
@@ -47,14 +47,6 @@ fn check_non_overlapping(regions: &Vec<(u64, &[u8])>) {
     }
 }
 
-// TODO: get rid of this and do it all inline
-unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    ::core::slice::from_raw_parts(
-        (p as *const T) as *const u8,
-        ::core::mem::size_of::<T>(),
-    )
-}
-
 #[repr(C)]
 struct LoaderRegion64 {
     load_addr: u64,
@@ -77,7 +69,7 @@ struct LoaderHeader64 {
     num_regions: u64,
 }
 
-struct Loader<'a> {
+pub struct Loader<'a> {
     image: Vec<u8>,
     header: LoaderHeader64,
     region_metadata: Vec<LoaderRegion64>,
@@ -238,28 +230,27 @@ impl<'a> Loader<'a> {
         }
     }
 
-    pub fn write(&self, path: &Path) {
+    pub fn write_image(&self, path: &Path) {
         let mut loader_file = match File::create(path) {
             Ok(file) => file,
             Err(e) => panic!("Could not create '{}': {}", path.display(), e),
         };
 
         // First write out all the image data
-        loader_file.write_all(self.image.as_slice());
+        loader_file.write_all(self.image.as_slice()).expect("Failed to write image data to loader");
 
         // Then we write out the loader metadata (known as the 'header')
-        let mut offset = 0;
         let header_bytes = unsafe { any_as_u8_slice(&self.header) };
-        loader_file.write_all(header_bytes);
+        loader_file.write_all(header_bytes).expect("Failed to write header data to loader");
         // For each region, we need to write out the region metadata as well
         for region in &self.region_metadata {
             let region_metadata_bytes = unsafe { any_as_u8_slice(region) };
-            loader_file.write_all(region_metadata_bytes);
+            loader_file.write_all(region_metadata_bytes).expect("Failed to write region metadata to loader");
         }
 
         // Now we can write out all the region data
         for (_, data) in &self.regions {
-            loader_file.write_all(data);
+            loader_file.write_all(data).expect("Failed to write region data to loader");
         }
     }
 

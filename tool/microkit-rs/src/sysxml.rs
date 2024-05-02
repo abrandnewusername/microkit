@@ -139,7 +139,6 @@ impl<'a> SystemDescription<'a> {
 }
 
 pub fn parse<'a>(xml: &str) -> SystemDescription<'a> {
-    println!("{}", xml);
     let mut deserializer = Deserializer::from_str(xml);
     let system_xml = XmlSystemDescription::deserialize(&mut deserializer).unwrap();
 

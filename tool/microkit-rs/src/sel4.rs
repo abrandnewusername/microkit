@@ -1,7 +1,6 @@
-use serde::Serialize;
-
 #[repr(u64)]
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
+#[allow(dead_code)]
 pub enum ObjectType {
     Untyped = 0,
     Tcb = 1,
@@ -60,6 +59,9 @@ pub const OBJECT_SIZE_SMALL_PAGE: u64 = 4 * 1024;
 pub const OBJECT_SIZE_VSPACE: u64 = 4 * 1024;
 // pub const OBJECT_SIZE_ASID_POOL: u64 = 1 << 12;
 
+#[repr(u32)]
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub enum Rights {
     None = 0x0,
     Write = 0x1,
@@ -76,6 +78,9 @@ pub enum ArmIrqTrigger {
     Edge = 1,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum InvocationLabel {
     // Untyped
     UntypedRetype = 1,
@@ -88,7 +93,7 @@ enum InvocationLabel {
     TcbSetMCPriority = 7,
     TcbSetSchedParams = 8,
     TcbSetTimeoutEndpoint = 9,
-    TcbSetIPcbuffer = 10,
+    TcbSetIpcBuffer = 10,
     TcbSetSpace = 11,
     TcbSuspend = 12,
     TcbResume = 13,
@@ -96,14 +101,14 @@ enum InvocationLabel {
     TcbUnbindNotification = 15,
     TcbSetTLSBase = 16,
     // CNode
-    CNodeRevoke = 17,
-    CNodeDelete = 18,
-    CNodeCancelBadgedSends = 19,
-    CNodeCopy = 20,
-    CNodeMint = 21,
-    CNodeMove = 22,
-    CNodeMutate = 23,
-    CNodeRotate = 24,
+    CnodeRevoke = 17,
+    CnodeDelete = 18,
+    CnodeCancelBadgedSends = 19,
+    CnodeCopy = 20,
+    CnodeMint = 21,
+    CnodeMove = 22,
+    CnodeMutate = 23,
+    CnodeRotate = 24,
     // IRQ
     IrqIssueIrqHandler = 25,
     IrqAckIrq = 26,
@@ -111,14 +116,14 @@ enum InvocationLabel {
     IrqClearIrqHandler = 28,
     // Domain
     DomainSetSet = 29,
-    // Sched
+    // Scheduling
     SchedControlConfigureFlags = 30,
     SchedContextBind = 31,
     SchedContextUnbind = 32,
     SchedContextUnbindObject = 33,
     SchedContextConsume = 34,
     SchedContextYieldTo = 35,
-    // ARM V Space
+    // ARM VSpace
     ArmVspaceCleanData = 36,
     ArmVspaceInvalidateData = 37,
     ArmVspaceCleanInvalidateData = 38,
@@ -143,7 +148,8 @@ enum InvocationLabel {
     ArmIrqIssueIrqHandlerTrigger = 52,
 }
 
-#[derive(Serialize)]
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub struct Aarch64Regs {
     pub pc: u64,
     pub sp: u64,
@@ -232,34 +238,143 @@ impl Aarch64Regs {
     }
 }
 
-impl Invocation {
-    pub fn generic(self) {
-        // IMPLEMENT
-        let (_, _, _): (InvocationLabel, &[u64], &[u64]) = match self {
-            Invocation::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } =>
-                                          (InvocationLabel::UntypedRetype, &[untyped, object_type as u64, size_bits, root, node_index, node_depth, node_offset, num_objects], &[root]),
-            Invocation::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
-                                          (InvocationLabel::UntypedRetype, &[cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights as u64, badge], &[src_root]),
-            _ => panic!("fuck")
-        };
-    }
-
-    // TODO: count should probably be usize...
-    pub fn repeat(&mut self, _count: u64, _repeat: Invocation) {
-        // IMPLEMENT
-        // match self {
-        //     Invocation::CnodeMint => {
-        //         match repeat {
-        //             Invocation::CnodeMint { }
-        //             _ => panic!("cannot repeat")
-        //         }
-        //     }
-        // }
+impl InvocationLabel {
+    // TODO: not sure whether this should be a method on InvocationLabel or InvocationArgs
+    pub fn from_args(args: &InvocationArgs) -> InvocationLabel {
+        match args {
+            InvocationArgs::UntypedRetype { .. } => InvocationLabel::UntypedRetype,
+            InvocationArgs::TcbSetSchedParams { .. } => InvocationLabel::TcbSetSchedParams,
+            InvocationArgs::TcbSetSpace { .. } => InvocationLabel::TcbSetSpace,
+            InvocationArgs::TcbSetIpcBuffer { .. } => InvocationLabel::TcbSetIpcBuffer,
+            InvocationArgs::TcbResume { .. } => InvocationLabel::TcbResume,
+            InvocationArgs::TcbWriteRegisters { .. } => InvocationLabel::TcbWriteRegisters,
+            InvocationArgs::TcbBindNotification { .. } => InvocationLabel::TcbBindNotification,
+            InvocationArgs::AsidPoolAssign { .. } => InvocationLabel::ArmAsidPoolAssign,
+            InvocationArgs::IrqControlGetTrigger { .. } => InvocationLabel::ArmIrqIssueIrqHandlerTrigger,
+            InvocationArgs::IrqHandlerSetNotification { .. } => InvocationLabel::IrqSetIrqHandler,
+            InvocationArgs::PageTableMap { .. } => InvocationLabel::ArmPageTableMap,
+            InvocationArgs::PageMap { .. } => InvocationLabel::ArmPageMap,
+            InvocationArgs::CnodeMint { .. } => InvocationLabel::CnodeMint,
+            InvocationArgs::SchedControlConfigureFlags { .. } => InvocationLabel::SchedControlConfigureFlags,
+        }
     }
 }
 
+pub struct Invocation {
+    label: InvocationLabel,
+    args: InvocationArgs,
+    repeat: Option<(u64, InvocationArgs)>,
+}
+
+impl Invocation {
+    pub fn new(args: InvocationArgs) -> Invocation {
+        Invocation {
+            label: InvocationLabel::from_args(&args),
+            args,
+            repeat: None,
+        }
+    }
+
+    /// Convert our higher-level representation of a seL4 invocation
+    /// into raw bytes that will be given to the monitor to interpret
+    /// at runtime.
+    /// Appends to the given data
+    pub fn get_raw_invocation(&self, _data: &mut Vec<u8>) {
+        let (service, args, extra_caps): (u64, Vec<u64>, Vec<u64>) = self.args.get_args();
+
+        // TODO: use into() instead?
+        let label_num = self.label as u64;
+        let mut tag = Invocation::message_info_new(label_num, 0, extra_caps.len() as u64, args.len() as u64);
+        let mut extra = vec![];
+        if let Some((count, repeat)) = self.repeat {
+            tag |= (count - 1) << 32;
+            assert!(matches!(self.args, repeat));
+            let (repeat_service, repeat_args, repeat_extra_caps) = repeat.get_args();
+            extra.push(repeat_service);
+            extra.extend(repeat_args);
+            extra.extend(repeat_extra_caps);
+        }
+
+        let mut all_args = vec![tag, service];
+        all_args.extend(extra_caps);
+        all_args.extend(args);
+    }
+
+    // TODO: count should probably be usize...
+    pub fn repeat(&mut self, count: u64, repeat_args: InvocationArgs) {
+        assert!(self.repeat.is_none());
+        self.repeat = Some((count, repeat_args));
+    }
+
+    pub fn message_info_new(label: u64, caps: u64, extra_caps: u64, length: u64) -> u64 {
+        assert!(label < (1 << 50));
+        assert!(caps < 8);
+        assert!(extra_caps < 8);
+        assert!(length < 0x80);
+
+        label << 12 | caps << 9 | extra_caps << 7 | length
+    }
+}
+
+impl InvocationArgs {
+    pub fn get_args(self) -> (u64, Vec<u64>, Vec<u64>) {
+        match self {
+            InvocationArgs::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } =>
+                                        (
+                                           untyped,
+                                           vec![object_type as u64, size_bits, node_index, node_depth, node_offset, num_objects],
+                                           vec![root]
+                                        ),
+            InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } =>
+                                        (
+                                            tcb,
+                                            vec![mcp, priority],
+                                            vec![authority, sched_context, fault_ep]
+                                        ),
+            InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
+                                        (
+                                            tcb,
+                                            vec![tcb, cspace_root_data, vspace_root_data],
+                                            vec![fault_ep, cspace_root, vspace_root]
+                                        ),
+            InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } => (tcb, vec![buffer], vec![buffer_frame]),
+            InvocationArgs::TcbResume { tcb } => (tcb, vec![], vec![]),
+            InvocationArgs::TcbWriteRegisters { .. } => panic!("TODO TcbWriteRegisters"),
+            InvocationArgs::TcbBindNotification { tcb, notification } => (tcb, vec![], vec![notification]),
+            InvocationArgs::AsidPoolAssign { asid_pool, vspace } => (asid_pool, vec![], vec![vspace]),
+            InvocationArgs::IrqControlGetTrigger { irq_control, irq, trigger, dest_root, dest_index, dest_depth } =>
+                                        (
+                                            irq_control,
+                                            vec![irq, trigger as u64, dest_index, dest_depth],
+                                            vec![dest_root],
+                                        ),
+            InvocationArgs::IrqHandlerSetNotification { irq_handler, notification } => (irq_handler, vec![], vec![notification]),
+            InvocationArgs::PageTableMap { page_table, vspace, vaddr, attr } =>
+                                        (
+                                            page_table,
+                                            vec![vaddr, attr],
+                                            vec![vspace]
+                                        ),
+            InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } => (page, vec![vaddr, rights as u64, attr], vec![vspace]),
+            InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
+                                        (
+                                            cnode,
+                                            vec![dest_index, dest_depth, src_root, src_obj, src_depth, rights as u64, badge],
+                                            vec![src_root]
+                                        ),
+            InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>
+                                        (
+                                            sched_control,
+                                            vec![budget, period, extra_refills, badge, flags],
+                                            vec![sched_context]
+                                        )
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
-pub enum Invocation {
+pub enum InvocationArgs {
     UntypedRetype {
         untyped: u64,
         object_type: ObjectType,
@@ -342,24 +457,6 @@ pub enum Invocation {
         src_obj: u64,
         src_depth: u64,
         rights: u64,
-        badge: u64,
-    },
-    CnodeCopy {
-        cnode: u64,
-        dest_index: u64,
-        dest_depth: u64,
-        src_root: u64,
-        src_obj: u64,
-        src_depth: u64,
-        rights: Rights,
-    },
-    CnodeMutate {
-        cnode: u64,
-        dest_index: u64,
-        dest_depth: u64,
-        src_root: u64,
-        src_obj: u64,
-        src_depth: u64,
         badge: u64,
     },
     SchedControlConfigureFlags {
