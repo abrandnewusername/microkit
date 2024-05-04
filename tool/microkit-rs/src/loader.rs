@@ -174,7 +174,8 @@ impl<'a> Loader<'a> {
         let kernel_entry = kernel_elf.entry;
 
         // TODO: don't we already have inittask_p_v_offset? I'm confused
-        let pv_offset = inittask_first_paddr - inittask_first_vaddr;
+        // TODO: I am confused by why the Python tool does this
+        let pv_offset = inittask_first_paddr.wrapping_sub(inittask_first_vaddr);
 
         let ui_p_reg_start = inittask_first_paddr;
         let ui_p_reg_end = inittask_last_vaddr - inittask_p_v_offset;

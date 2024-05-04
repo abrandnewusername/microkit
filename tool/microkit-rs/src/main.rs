@@ -514,9 +514,12 @@ impl DisjointMemoryRegion {
         for region in &self.regions {
             if size <= region.size() {
                 region_to_remove = Some(*region);
+                break;
             }
         }
 
+        // TODO: not the most ergonomic code, it's structured this way because
+        // we have mutable and immutable references - see if we can get around it
         if let Some(region) = region_to_remove {
             self.remove_region(region.base, region.base + size);
             return region.base;
@@ -2263,6 +2266,14 @@ fn main() {
     monitor_elf.write_symbol(monitor_config.system_invocation_count_symbol_name, &built_system.system_invocations.len().to_le_bytes());
     monitor_elf.write_symbol(monitor_config.bootstrap_invocation_data_symbol_name, &bootstrap_invocation_data);
 
+    let tcb_caps = built_system.tcb_caps;
+    let sched_caps = built_system.sched_caps;
+    let ntfn_caps = built_system.ntfn_caps;
+
+    monitor_elf.write_symbol("fault_ep", &built_system.fault_ep_cap_address.to_le_bytes());
+    monitor_elf.write_symbol("reply", &built_system.reply_cap_address.to_le_bytes());
+    // monitor_elf.write_symbol("tcbs", )
+
     // Generate the report
     let report_path = "report.txt";
     let report = match std::fs::File::create(report_path) {
@@ -2309,6 +2320,7 @@ fn main() {
         &monitor_elf,
         Some(built_system.initial_task_phys_region.base),
         built_system.reserved_region,
+        // TODO: this is wrong, we need all the regions not just these
         vec![(built_system.reserved_region.base, &system_invocation_data)]
     );
     loader.write_image(&Path::new("testing/loader.img"))
