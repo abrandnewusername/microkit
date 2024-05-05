@@ -1,4 +1,6 @@
 use std::fmt;
+use std::io::{Write, BufWriter};
+use std::fs::File;
 
 #[repr(u64)]
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
@@ -31,6 +33,32 @@ impl ObjectType {
             ObjectType::SmallPage => Some(OBJECT_SIZE_SMALL_PAGE),
             _ => None
         }
+    }
+
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            ObjectType::Untyped => "SEL4_UNTYPED_OBJECT",
+            ObjectType::Tcb => "SEL4_TCB_OBJECT",
+            ObjectType::Endpoint => "SEL4_ENDPOINT_OBJECT",
+            ObjectType::Notification => "SEL4_NOTIFICATION_OBJECT",
+            ObjectType::CNode => "SEL4_CNODE_OBJECT",
+            ObjectType::SchedContext => "SEL4_SCHEDCONTEXT_OBJECT",
+            ObjectType::Reply => "SEL4_REPLY_OBJECT",
+            ObjectType::HugePage => "SEL4_HUGE_PAGE_OBJECT",
+            ObjectType::VSpace => "SEL4_VSPACE_OBJECT",
+            ObjectType::SmallPage => "SEL4_SMALL_PAGE_OBJECT",
+            ObjectType::LargePage => "SEL4_LARGE_PAGE_OBJECT",
+            ObjectType::PageTable => "SEL4_PAGE_TABLE_OBJECT",
+        }
+    }
+
+    pub fn format(&self) -> String {
+        let object_size = if let Some(fixed_size) = self.fixed_size() {
+            format!("0x{:x}", fixed_size)
+        } else {
+            "variable size".to_string()
+        };
+        format!("         object_type: {} ({} - {})", *self as u64, self.to_str(), object_size)
     }
 }
 
@@ -309,34 +337,6 @@ pub struct Invocation {
     repeat: Option<(u64, InvocationArgs)>,
 }
 
-impl fmt::Display for Invocation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut arg_strs = Vec::new();
-        match self.args {
-            InvocationArgs::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } => {
-                arg_strs.push(format!("object_type {}", object_type as u64));
-                arg_strs.push(format!("size_bits {} (0x{:x})", size_bits, size_bits));
-                arg_strs.push(format!("root (cap) {:x}", root));
-            },
-            // InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } =>
-            // InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
-            // InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } =>
-            // InvocationArgs::TcbResume { tcb } =>
-            // InvocationArgs::TcbWriteRegisters { tcb, resume, arch_flags, regs, count } =>
-            // InvocationArgs::TcbBindNotification { tcb, notification } =>
-            // InvocationArgs::AsidPoolAssign { asid_pool, vspace } =>
-            // InvocationArgs::IrqControlGetTrigger { irq_control, irq, trigger, dest_root, dest_index, dest_depth } =>
-            // InvocationArgs::IrqHandlerSetNotification { irq_handler, notification } =>
-            // InvocationArgs::PageTableMap { page_table, vspace, vaddr, attr } =>
-            // InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } =>
-            // InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
-            // InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>
-            _ => arg_strs.push(format!("TODO for {}", self.label as u64)),
-        }
-        write!(f, "{:<20} - {:<17} - 0x{:<16x} \n{}", self.object_type(), "TODO", 1, arg_strs.join("\n"))
-    }
-}
-
 impl Invocation {
     pub fn new(args: InvocationArgs) -> Invocation {
         Invocation {
@@ -386,6 +386,37 @@ impl Invocation {
         label << 12 | caps << 9 | extra_caps << 7 | length
     }
 
+    fn format_field(field_name: &'static str, value: String) -> String {
+        format!("         {:<20} {}", field_name, value)
+    }
+
+    pub fn report_fmt(&self, f: &mut BufWriter<File>) {
+        let mut arg_strs = Vec::new();
+        match self.args {
+            InvocationArgs::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } => {
+                arg_strs.push(object_type.format());
+                // arg_strs.push(format!("object_type {}", object_type as u64));
+                // arg_strs.push(format!("size_bits {} (0x{:x})", size_bits, size_bits));
+                // arg_strs.push(format!("root (cap) {:x}", root));
+            },
+            // InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } =>
+            // InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
+            // InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } =>
+            // InvocationArgs::TcbResume { tcb } =>
+            // InvocationArgs::TcbWriteRegisters { tcb, resume, arch_flags, regs, count } =>
+            // InvocationArgs::TcbBindNotification { tcb, notification } =>
+            // InvocationArgs::AsidPoolAssign { asid_pool, vspace } =>
+            // InvocationArgs::IrqControlGetTrigger { irq_control, irq, trigger, dest_root, dest_index, dest_depth } =>
+            // InvocationArgs::IrqHandlerSetNotification { irq_handler, notification } =>
+            // InvocationArgs::PageTableMap { page_table, vspace, vaddr, attr } =>
+            // InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } =>
+            // InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
+            // InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>
+            _ => arg_strs.push(format!("TODO for {}", self.label as u64)),
+        }
+        _ = write!(f, "{:<20} - {:<17} - 0x{:<16x} \n{}\n", self.object_type(), self.method_name(), 1, arg_strs.join("\n"))
+    }
+
     pub fn object_type(&self) -> &'static str {
         match self.label {
             InvocationLabel::UntypedRetype => "Untyped",
@@ -402,6 +433,26 @@ impl Invocation {
             InvocationLabel::ArmPageMap => "Page",
             InvocationLabel::CnodeMint => "CNode",
             InvocationLabel::SchedControlConfigureFlags => "SchedControl",
+            _ => panic!("Unexpected") // TODO
+        }
+    }
+
+    pub fn method_name(&self) -> &'static str {
+        match self.label {
+            InvocationLabel::UntypedRetype => "Retype",
+            InvocationLabel::TcbSetSchedParams => "SetSchedParams",
+            InvocationLabel::TcbSetSpace => "SetSpace",
+            InvocationLabel::TcbSetIpcBuffer => "SetIPCBuffer",
+            InvocationLabel::TcbResume => "Resume",
+            InvocationLabel::TcbWriteRegisters => "WriteRegisters",
+            InvocationLabel::TcbBindNotification => "BindNotification",
+            InvocationLabel::ArmAsidPoolAssign => "Assign",
+            InvocationLabel::ArmIrqIssueIrqHandlerTrigger => "Get",
+            InvocationLabel::IrqSetIrqHandler => "SetNotification",
+            InvocationLabel::ArmPageTableMap |
+            InvocationLabel::ArmPageMap => "Map",
+            InvocationLabel::CnodeMint => "Mint",
+            InvocationLabel::SchedControlConfigureFlags => "ConfigureFlags",
             _ => panic!("Unexpected") // TODO
         }
     }

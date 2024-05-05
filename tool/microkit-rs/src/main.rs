@@ -2348,7 +2348,8 @@ fn main() {
     }
     _ = writeln!(&mut report_buf, "\n# Bootstrap Kernel Invocations Detail\n");
     for (i, invocation) in built_system.bootstrap_invocations.iter().enumerate() {
-        _ = writeln!(&mut report_buf, "    {:<4x} {}", i, invocation);
+        _ = write!(&mut report_buf, "    0x{:04x} ", i);
+        invocation.report_fmt(&mut report_buf);
     }
 
     report_buf.flush().unwrap();
