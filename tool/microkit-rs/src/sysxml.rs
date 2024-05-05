@@ -4,6 +4,16 @@ use serde::{Deserialize};
 use crate::sel4::{PageSize, ArmIrqTrigger};
 
 #[derive(Deserialize, Debug, PartialEq)]
+struct XmlSysIrq {
+    #[serde(rename = "@irq")]
+    irq: String,
+    #[serde(rename = "@id")]
+    id: String,
+    #[serde(rename = "@trigger")]
+    trigger: Option<String>,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
 struct XmlProgramImage {
     #[serde(rename = "@path")]
     path: String,
@@ -15,7 +25,9 @@ struct XmlProtectionDomain {
     pub name: String,
     #[serde(rename = "@priority")]
     pub priority: String,
-    pub program_image: XmlProgramImage
+    pub program_image: XmlProgramImage,
+    #[serde(rename = "irq")]
+    pub irqs: Option<Vec<XmlSysIrq>>,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -97,7 +109,12 @@ impl ProtectionDomain {
         let passive = false;
         let program_image = Path::new(&xml.program_image.path).to_path_buf();
         let maps = vec![];
-        let irqs = vec![];
+        let irqs;
+        if let Some(xml_irqs) = xml.irqs {
+            irqs = xml_irqs.into_iter().map(|irq| SysIrq::from_xml(irq)).collect();
+        } else {
+            irqs = vec![];
+        }
         let setvars = vec![];
 
         // TODO: need to check that parse works as expected. I don't know
@@ -113,6 +130,33 @@ impl ProtectionDomain {
             maps,
             irqs,
             setvars,
+        }
+    }
+}
+
+impl SysIrq {
+    fn from_xml(xml: XmlSysIrq) -> SysIrq {
+        // TODO: remove ARM specific trigger and use general thing
+        let trigger;
+        if let Some(xml_trigger) = xml.trigger {
+            trigger = match xml_trigger.as_str() {
+                "level" => ArmIrqTrigger::Level,
+                "edge" => ArmIrqTrigger::Edge,
+                _ => panic!("trigger must be either 'level' or 'edge'")
+            }
+        } else {
+            // Default to level triggered
+            trigger = ArmIrqTrigger::Level;
+        }
+
+        // TODO: need to actually handle error in case it's not a u64
+        let irq = xml.irq.parse::<u64>().unwrap();
+        let id = xml.id.parse::<u64>().unwrap();
+
+        SysIrq {
+            irq,
+            id,
+            trigger,
         }
     }
 }

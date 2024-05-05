@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[repr(u64)]
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
 #[allow(dead_code)]
@@ -232,6 +234,47 @@ impl Aarch64Regs {
         }
     }
 
+    pub fn as_slice(&self) -> [u64; 36] {
+        [
+            self.pc,
+            self.sp,
+            self.spsr,
+            self.x0,
+            self.x1,
+            self.x2,
+            self.x3,
+            self.x4,
+            self.x5,
+            self.x6,
+            self.x7,
+            self.x8,
+            self.x16,
+            self.x17,
+            self.x18,
+            self.x29,
+            self.x30,
+            self.x9,
+            self.x10,
+            self.x11,
+            self.x12,
+            self.x13,
+            self.x14,
+            self.x15,
+            self.x19,
+            self.x20,
+            self.x21,
+            self.x22,
+            self.x23,
+            self.x24,
+            self.x25,
+            self.x26,
+            self.x27,
+            self.x28,
+            self.tpidr_el0,
+            self.tpidrro_el0,
+        ]
+    }
+
     pub fn count(&self) -> u64 {
         // TODO: hack
         1
@@ -266,6 +309,34 @@ pub struct Invocation {
     repeat: Option<(u64, InvocationArgs)>,
 }
 
+impl fmt::Display for Invocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut arg_strs = Vec::new();
+        match self.args {
+            InvocationArgs::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } => {
+                arg_strs.push(format!("object_type {}", object_type as u64));
+                arg_strs.push(format!("size_bits {} (0x{:x})", size_bits, size_bits));
+                arg_strs.push(format!("root (cap) {:x}", root));
+            },
+            // InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } =>
+            // InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
+            // InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } =>
+            // InvocationArgs::TcbResume { tcb } =>
+            // InvocationArgs::TcbWriteRegisters { tcb, resume, arch_flags, regs, count } =>
+            // InvocationArgs::TcbBindNotification { tcb, notification } =>
+            // InvocationArgs::AsidPoolAssign { asid_pool, vspace } =>
+            // InvocationArgs::IrqControlGetTrigger { irq_control, irq, trigger, dest_root, dest_index, dest_depth } =>
+            // InvocationArgs::IrqHandlerSetNotification { irq_handler, notification } =>
+            // InvocationArgs::PageTableMap { page_table, vspace, vaddr, attr } =>
+            // InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } =>
+            // InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
+            // InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>
+            _ => arg_strs.push(format!("TODO for {}", self.label as u64)),
+        }
+        write!(f, "{:<20} - {:<17} - 0x{:<16x} \n{}", self.object_type(), "TODO", 1, arg_strs.join("\n"))
+    }
+}
+
 impl Invocation {
     pub fn new(args: InvocationArgs) -> Invocation {
         Invocation {
@@ -279,7 +350,7 @@ impl Invocation {
     /// into raw bytes that will be given to the monitor to interpret
     /// at runtime.
     /// Appends to the given data
-    pub fn get_raw_invocation(&self, _data: &mut Vec<u8>) {
+    pub fn add_raw_invocation(&self, _data: &mut Vec<u8>) {
         let (service, args, extra_caps): (u64, Vec<u64>, Vec<u64>) = self.args.get_args();
 
         // TODO: use into() instead?
@@ -287,8 +358,8 @@ impl Invocation {
         let mut tag = Invocation::message_info_new(label_num, 0, extra_caps.len() as u64, args.len() as u64);
         let mut extra = vec![];
         if let Some((count, repeat)) = self.repeat {
+            // TODO: can we somehow check that the variant of repeat InvocationArgs is the same as the invocation?
             tag |= (count - 1) << 32;
-            assert!(matches!(self.args, repeat));
             let (repeat_service, repeat_args, repeat_extra_caps) = repeat.get_args();
             extra.push(repeat_service);
             extra.extend(repeat_args);
@@ -313,6 +384,26 @@ impl Invocation {
         assert!(length < 0x80);
 
         label << 12 | caps << 9 | extra_caps << 7 | length
+    }
+
+    pub fn object_type(&self) -> &'static str {
+        match self.label {
+            InvocationLabel::UntypedRetype => "Untyped",
+            InvocationLabel::TcbSetSchedParams |
+            InvocationLabel::TcbSetSpace |
+            InvocationLabel::TcbSetIpcBuffer |
+            InvocationLabel::TcbResume |
+            InvocationLabel::TcbWriteRegisters |
+            InvocationLabel::TcbBindNotification => "TCB",
+            InvocationLabel::ArmAsidPoolAssign => "ASID Pool",
+            InvocationLabel::ArmIrqIssueIrqHandlerTrigger => "IRQ Control",
+            InvocationLabel::IrqSetIrqHandler => "IRQ Handler",
+            InvocationLabel::ArmPageTableMap => "Page Table",
+            InvocationLabel::ArmPageMap => "Page",
+            InvocationLabel::CnodeMint => "CNode",
+            InvocationLabel::SchedControlConfigureFlags => "SchedControl",
+            _ => panic!("Unexpected") // TODO
+        }
     }
 }
 
@@ -339,7 +430,14 @@ impl InvocationArgs {
                                         ),
             InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } => (tcb, vec![buffer], vec![buffer_frame]),
             InvocationArgs::TcbResume { tcb } => (tcb, vec![], vec![]),
-            InvocationArgs::TcbWriteRegisters { .. } => panic!("TODO TcbWriteRegisters"),
+            InvocationArgs::TcbWriteRegisters { tcb, resume, arch_flags, regs, count } => {
+                // TODO: this is kinda fucked
+                let resume_byte = if resume { 1 } else { 0 };
+                let flags: u64 = ((arch_flags as u64) << 8) | resume_byte;
+                let mut args = vec![flags, count];
+                args.extend(regs.as_slice());
+                (tcb, args, vec![])
+            }
             InvocationArgs::TcbBindNotification { tcb, notification } => (tcb, vec![], vec![notification]),
             InvocationArgs::AsidPoolAssign { asid_pool, vspace } => (asid_pool, vec![], vec![vspace]),
             InvocationArgs::IrqControlGetTrigger { irq_control, irq, trigger, dest_root, dest_index, dest_depth } =>

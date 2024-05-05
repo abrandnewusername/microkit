@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 use std::fmt;
 use std::fs;
+use std::cmp::{max,min};
 use std::path::{Path, PathBuf};
 use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
 use elf::ElfFile;
@@ -15,6 +16,12 @@ use sel4::{Invocation, InvocationArgs, ObjectType, Rights, PageSize, Aarch64Regs
 use std::io::{Write, BufWriter};
 use std::mem::size_of;
 use loader::Loader;
+
+const MAX_PDS: usize = 64;
+// It should be noted that if you were to change the value of
+// the maximum PD name length, you would also have to change
+// the monitor and libmicrokit.
+const PD_MAX_NAME_LENGTH: usize = 16;
 
 const SYMBOL_IPC_BUFFER: &str = "__sel4_ipc_buffer_obj";
 
@@ -238,7 +245,7 @@ impl<'a> InitSystem<'a> {
             while padding_required > 0 {
                 let wm_lsb = util::lsb(wm);
                 let sz_msb = util::msb(padding_required);
-                let pad_obejct_size = 1 << std::cmp::min(wm_lsb, sz_msb);
+                let pad_obejct_size = 1 << min(wm_lsb, sz_msb);
                 padding_sizes.push(pad_obejct_size);
                 wm += pad_obejct_size;
                 padding_required -= pad_obejct_size;
@@ -320,7 +327,7 @@ impl<'a> InitSystem<'a> {
         let mut to_alloc = count;
         let mut alloc_cap_slot = base_cap_slot;
         while to_alloc > 0 {
-            let call_count = std::cmp::min(to_alloc, self.kernel_config.fan_out_limit);
+            let call_count = min(to_alloc, self.kernel_config.fan_out_limit);
             self.invocations.push(Invocation::new(InvocationArgs::UntypedRetype{
                 untyped: allocation.untyped_cap_address,
                 object_type: object_type,
@@ -413,7 +420,7 @@ impl MemoryRegion {
             if base == 0 {
                 bits = size_bits;
             } else {
-                bits = std::cmp::min(size_bits, util::lsb(base));
+                bits = min(size_bits, util::lsb(base));
             }
 
             if bits > max_bits {
@@ -897,7 +904,7 @@ fn rootserver_max_size_bits() -> u64 {
     let vspace_bits = 12; // seL4_VSpaceBits
 
     let cnode_size_bits = root_cnode_bits + slot_bits;
-    std::cmp::max(cnode_size_bits, vspace_bits)
+    max(cnode_size_bits, vspace_bits)
 }
 
 fn calculate_rootserver_size(initial_task_region: MemoryRegion) -> u64 {
@@ -1233,7 +1240,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     let boot_info_device_untypeds: Vec<&UntypedObject> = kernel_boot_info.untyped_objects.iter().filter(|o| o.is_device).collect();
     for ut in boot_info_device_untypeds {
         let ut_pages = ut.region.size() / kernel_config.minimum_page_size;
-        let retype_page_count = std::cmp::min(ut_pages, remaining_pages);
+        let retype_page_count = min(ut_pages, remaining_pages);
         assert!(retype_page_count <= kernel_config.fan_out_limit);
         bootstrap_invocations.push(Invocation::new(InvocationArgs::UntypedRetype{
             untyped: ut.cap,
@@ -1529,15 +1536,21 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     let pd_reply_objs = &reply_objs[1..];
     let endpoint_objs = init_system.allocate_objects(ObjectType::Endpoint, endpoint_names, None);
     let fault_ep_endpoint_object = &endpoint_objs[0];
-    let mut pp_ep_endpoint_objs: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
-    // Because the first reply object is for the monitor, we map from index 1 of endpoint_objs
-    pp_protection_domains.iter().enumerate().map(|(i, pd)| pp_ep_endpoint_objs.insert(pd, &endpoint_objs[1..][i]));
+    let mut pp_ep_endpoint_objs: HashMap<&ProtectionDomain, &KernelObject> = HashMap::with_capacity(pp_protection_domains.len());
+    for (i, pd) in pp_protection_domains.iter().enumerate() {
+        // Because the first reply object is for the monitor, we map from index 1 of endpoint_objs
+        pp_ep_endpoint_objs.insert(pd, &endpoint_objs[1..][i]);
+    }
 
     let notification_names = system.protection_domains.iter().map(|pd| format!("Notification: PD={}", pd.name)).collect();
     let notification_objs = init_system.allocate_objects(ObjectType::Notification, notification_names, None);
     let notification_caps = notification_objs.iter().map(|ntfn| ntfn.cap_addr).collect();
-    let mut notification_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
-    system.protection_domains.iter().enumerate().map(|(i, pd)| notification_objs_by_pd.insert(pd, &notification_objs[i]));
+    // TODO: notification_objs_by_pd is only really used when processing channels, we may be able to just
+    // remove this altogether and go off indexes instead
+    let mut notification_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::with_capacity(notification_objs.len());
+    for (i, pd) in system.protection_domains.iter().enumerate() {
+        notification_objs_by_pd.insert(pd, &notification_objs[i]);
+    }
 
     // Determine number of upper directory / directory / page table objects required
     //
@@ -1612,8 +1625,10 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     // Create CNodes - all CNode objects are the same size: 128 slots.
     let cnode_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("CNode: PD={}", pd.name)).collect();
     let cnode_objs = init_system.allocate_objects(ObjectType::CNode, cnode_names, Some(PD_CAP_SIZE));
-    let mut cnode_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::new();
-    system.protection_domains.iter().enumerate().map(|(i, pd)| cnode_objs_by_pd.insert(pd, &cnode_objs[i]));
+    let mut cnode_objs_by_pd: HashMap<&ProtectionDomain, &KernelObject> = HashMap::with_capacity(system.protection_domains.len());
+    for (i, pd) in system.protection_domains.iter().enumerate() {
+        cnode_objs_by_pd.insert(pd, &cnode_objs[i]);
+    }
 
     let mut cap_slot = init_system.cap_slot;
     let kernel_objects = init_system.objects.clone();
@@ -2105,7 +2120,10 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     // And now we are finally done. We have all the invocations
 
     // TODO: get invocation data
-    let system_invocation_data: Vec<u8> = Vec::new();
+    let mut system_invocation_data: Vec<u8> = Vec::new();
+    for system_invocation in &system_invocations {
+        system_invocation.add_raw_invocation(&mut system_invocation_data);
+    }
 
     for pd in &system.protection_domains {
         let elf = pd_elf_files.get_mut(pd).unwrap();
@@ -2220,8 +2238,8 @@ fn main() {
         // TODO: check that the semantics of the Python version
         let new_system_cnode_size = 2_u32.pow(built_system.number_of_system_caps.next_power_of_two().ilog2());
 
-        invocation_table_size = std::cmp::max(invocation_table_size, new_invocation_table_size) as u64;
-        system_cnode_size = std::cmp::max(system_cnode_size, new_system_cnode_size as u64) as u64;
+        invocation_table_size = max(invocation_table_size, new_invocation_table_size) as u64;
+        system_cnode_size = max(system_cnode_size, new_system_cnode_size as u64) as u64;
     }
 
     // At this point we just need to patch the files (in memory) and write out the final image.
@@ -2266,13 +2284,30 @@ fn main() {
     monitor_elf.write_symbol(monitor_config.system_invocation_count_symbol_name, &built_system.system_invocations.len().to_le_bytes());
     monitor_elf.write_symbol(monitor_config.bootstrap_invocation_data_symbol_name, &bootstrap_invocation_data);
 
-    let tcb_caps = built_system.tcb_caps;
-    let sched_caps = built_system.sched_caps;
-    let ntfn_caps = built_system.ntfn_caps;
+    // TODO: sort out invocation data
+
+    let tcb_cap_bytes: Vec<u8> = built_system.tcb_caps.iter().flat_map(|cap| cap.to_le_bytes()).collect();
+    let sched_cap_bytes: Vec<u8> = built_system.sched_caps.iter().flat_map(|cap| cap.to_le_bytes()).collect();
+    let ntfn_cap_bytes: Vec<u8> = built_system.ntfn_caps.iter().flat_map(|cap| cap.to_le_bytes()).collect();
 
     monitor_elf.write_symbol("fault_ep", &built_system.fault_ep_cap_address.to_le_bytes());
     monitor_elf.write_symbol("reply", &built_system.reply_cap_address.to_le_bytes());
-    // monitor_elf.write_symbol("tcbs", )
+    monitor_elf.write_symbol("tcbs", &tcb_cap_bytes);
+    monitor_elf.write_symbol("scheduling_contexts", &sched_cap_bytes);
+    monitor_elf.write_symbol("notification_caps", &ntfn_cap_bytes);
+    // TODO: write out names
+    let mut pd_names_bytes = vec![0; MAX_PDS * PD_MAX_NAME_LENGTH];
+    for (i, pd) in system.protection_domains.iter().enumerate() {
+        // The monitor will index into the array of PD names based on the badge, which
+        // starts at 1 and hence we cannot use the 0th entry in the array.
+        let name = pd.name.as_bytes();
+        let start = (i + 1) * PD_MAX_NAME_LENGTH;
+        // Here instead of giving an error we simply take the minimum of the PD's name
+        // and how large of a name we can encode
+        let name_length = min(name.len(), PD_MAX_NAME_LENGTH);
+        let end = (i + 1) * PD_MAX_NAME_LENGTH + name_length;
+        pd_names_bytes[start..end].copy_from_slice(&name);
+    }
 
     // Generate the report
     let report_path = "report.txt";
@@ -2310,6 +2345,10 @@ fn main() {
         // TODO: don't use debug display for object type
         // TODO: would be good to print both the number for the object type and the string
         _ = writeln!(&mut report_buf, "    {:<50} {} cap_addr={:x} phys_addr={:x}", ko.name, ko.object_type as u64, ko.cap_addr, ko.phys_addr);
+    }
+    _ = writeln!(&mut report_buf, "\n# Bootstrap Kernel Invocations Detail\n");
+    for (i, invocation) in built_system.bootstrap_invocations.iter().enumerate() {
+        _ = writeln!(&mut report_buf, "    {:<4x} {}", i, invocation);
     }
 
     report_buf.flush().unwrap();

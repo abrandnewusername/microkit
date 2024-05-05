@@ -232,7 +232,7 @@ impl<'a> Loader<'a> {
     }
 
     pub fn write_image(&self, path: &Path) {
-        let mut loader_file = match File::create(path) {
+        let loader_file = match File::create(path) {
             Ok(file) => file,
             Err(e) => panic!("Could not create '{}': {}", path.display(), e),
         };
