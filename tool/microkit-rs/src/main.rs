@@ -372,6 +372,7 @@ struct Region {
     name: String,
     addr: u64,
     size: u64,
+    segment_idx: usize,
 }
 
 
@@ -636,7 +637,7 @@ impl KernelObjectAllocator {
     }
 }
 
-struct BuiltSystem {
+struct BuiltSystem<'a> {
     number_of_system_caps: u64,
     invocation_data: Vec<u8>,
     invocation_data_size: u64,
@@ -650,7 +651,8 @@ struct BuiltSystem {
     tcb_caps: Vec<u64>,
     sched_caps: Vec<u64>,
     ntfn_caps: Vec<u64>,
-    regions: Vec<Region>,
+    pd_elf_regions: HashMap<&'a ProtectionDomain, Vec<Region>>,
+    pd_elf_files: HashMap<&'a ProtectionDomain, ElfFile>,
     kernel_objects: Vec<KernelObject>,
     initial_task_virt_region: MemoryRegion,
     initial_task_phys_region: MemoryRegion,
@@ -1005,7 +1007,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
                     system: &'a SystemDescription,
                     invocation_table_size: u64,
                     system_cnode_size: u64,
-                    search_paths: &Vec<&str>) -> BuiltSystem {
+                    search_paths: &Vec<&str>) -> BuiltSystem<'a> {
     assert!(util::is_power_of_two(system_cnode_size));
     assert!(invocation_table_size % kernel_config.minimum_page_size == 0);
     assert!(invocation_table_size <= MAX_SYSTEM_INVOCATION_SIZE);
@@ -1355,20 +1357,22 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     //     as needed by protection domains based on mappings required
     let mut phys_addr_next = reserved_base + invocation_table_size;
     // Now we create additional MRs (and mappings) for the ELF files.
-    let mut regions = Vec::new();
+    let mut pd_elf_regions: HashMap<&ProtectionDomain, Vec<Region>> = HashMap::new();
     let mut extra_mrs = Vec::new();
     let mut pd_extra_maps: HashMap<&ProtectionDomain, Vec<SysMap>> = HashMap::new();
     for pd in &system.protection_domains {
+        pd_elf_regions.insert(pd, Vec::with_capacity(pd_elf_files[pd].segments.len()));
         for (seg_idx, segment) in pd_elf_files[pd].segments.iter().enumerate() {
             if !segment.loadable {
                 continue;
             }
 
             let segment_phys_addr = phys_addr_next + (segment.virt_addr % kernel_config.minimum_page_size);
-            regions.push(Region {
+            pd_elf_regions.get_mut(pd).unwrap().push(Region {
                 name: format!("PD-ELF {}-{}", pd.name, seg_idx),
                 addr: segment_phys_addr,
                 size: segment.data.len() as u64,
+                segment_idx: seg_idx,
             });
 
             let mut perms = 0;
@@ -2178,7 +2182,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         tcb_caps,
         sched_caps: sched_context_caps,
         ntfn_caps: notification_caps,
-        regions,
+        pd_elf_regions: pd_elf_regions,
+        pd_elf_files,
         kernel_objects,
         initial_task_phys_region,
         initial_task_virt_region,
@@ -2342,8 +2347,10 @@ fn main() {
     _ = writeln!(&mut report_buf, "    # of page caps      : {:>8}", comma_sep_u64(built_system.kernel_boot_info.page_cap_count));
     _ = writeln!(&mut report_buf, "    # of untyped objects: {:>8}", comma_sep_usize(built_system.kernel_boot_info.untyped_objects.len()));
     _ = writeln!(&mut report_buf, "\n# Loader Regions\n");
-    for region in built_system.regions {
-        _ = writeln!(&mut report_buf, "       {}", region);
+    for regions in built_system.pd_elf_regions.values() {
+        for region in regions {
+            _ = writeln!(&mut report_buf, "       {}", region);
+        }
     }
     _ = writeln!(&mut report_buf, "\n# Monitor (Initial Task) Info\n");
     _ = writeln!(&mut report_buf, "     virtual memory : {}", built_system.initial_task_virt_region);
@@ -2375,14 +2382,20 @@ fn main() {
 
     report_buf.flush().unwrap();
 
+    let mut loader_regions: Vec<(u64, &[u8])> = vec![(built_system.reserved_region.base, &built_system.invocation_data)];
+    for (pd, regions) in &built_system.pd_elf_regions {
+        for r in regions {
+            loader_regions.push((r.addr, &built_system.pd_elf_files[pd].segments[r.segment_idx].data));
+        }
+    }
+
     let loader = Loader::new(
         &Path::new(loader_elf_path),
         &kernel_elf,
         &monitor_elf,
         Some(built_system.initial_task_phys_region.base),
         built_system.reserved_region,
-        // TODO: this is wrong, we need all the regions not just these
-        vec![(built_system.reserved_region.base, &built_system.invocation_data)]
+        loader_regions,
     );
     loader.write_image(&Path::new("testing/loader.img"))
 }
