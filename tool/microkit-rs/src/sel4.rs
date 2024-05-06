@@ -1,6 +1,6 @@
-use std::fmt;
 use std::io::{Write, BufWriter};
 use std::fs::File;
+use std::collections::HashMap;
 
 #[repr(u64)]
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
@@ -58,7 +58,7 @@ impl ObjectType {
         } else {
             "variable size".to_string()
         };
-        format!("         object_type: {} ({} - {})", *self as u64, self.to_str(), object_size)
+        format!("         object_type:         {} ({} - {})", *self as u64, self.to_str(), object_size)
     }
 }
 
@@ -390,14 +390,18 @@ impl Invocation {
         format!("         {:<20} {}", field_name, value)
     }
 
-    pub fn report_fmt(&self, f: &mut BufWriter<File>) {
+    pub fn report_fmt(&self, f: &mut BufWriter<File>, cap_lookup: &HashMap<u64, String>) {
         let mut arg_strs = Vec::new();
-        match self.args {
+        let service_str = match self.args {
             InvocationArgs::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } => {
                 arg_strs.push(object_type.format());
-                // arg_strs.push(format!("object_type {}", object_type as u64));
-                // arg_strs.push(format!("size_bits {} (0x{:x})", size_bits, size_bits));
-                // arg_strs.push(format!("root (cap) {:x}", root));
+                arg_strs.push(Invocation::format_field("size_bits", size_bits.to_string()));
+                arg_strs.push(Invocation::format_field("root (cap)", format!("0x{:016x}", root)));
+                arg_strs.push(Invocation::format_field("node_index", node_index.to_string()));
+                arg_strs.push(Invocation::format_field("node_depth", node_depth.to_string()));
+                arg_strs.push(Invocation::format_field("node_offset", node_offset.to_string()));
+                arg_strs.push(Invocation::format_field("num_objects", num_objects.to_string()));
+                cap_lookup.get(&untyped).unwrap()
             },
             // InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } =>
             // InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
@@ -412,9 +416,12 @@ impl Invocation {
             // InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } =>
             // InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
             // InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>
-            _ => arg_strs.push(format!("TODO for {}", self.label as u64)),
-        }
-        _ = write!(f, "{:<20} - {:<17} - 0x{:<16x} \n{}\n", self.object_type(), self.method_name(), 1, arg_strs.join("\n"))
+            _ => {
+                arg_strs.push(format!("TODO for {}", self.label as u64));
+                panic!("tiodo")
+            }
+        };
+        _ = write!(f, "{:<20} - {:<17} - 0x{:016x} ({})\n{}\n", self.object_type(), self.method_name(), 1, service_str, arg_strs.join("\n"))
     }
 
     pub fn object_type(&self) -> &'static str {

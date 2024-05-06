@@ -2349,7 +2349,7 @@ fn main() {
     _ = writeln!(&mut report_buf, "\n# Bootstrap Kernel Invocations Detail\n");
     for (i, invocation) in built_system.bootstrap_invocations.iter().enumerate() {
         _ = write!(&mut report_buf, "    0x{:04x} ", i);
-        invocation.report_fmt(&mut report_buf);
+        invocation.report_fmt(&mut report_buf, &built_system.cap_lookup);
     }
 
     report_buf.flush().unwrap();
