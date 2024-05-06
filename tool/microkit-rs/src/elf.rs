@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-// TODO: panic if ELF is not little-endian
-
 #[repr(C, packed)]
 struct ElfHeader32 {
     ident_data: u8,
@@ -137,13 +135,13 @@ pub struct ElfFile {
 impl ElfFile {
     // TODO: error messages could be better by specifying which ELF we are dealing with
     // TODO: not sure about having String as the result type? Why didn't &str work?
-    pub fn from_path(path: &Path) -> Result<ElfFile, String> {
+    pub fn from_path(path: &Path) -> ElfFile {
         // TODO: check for errors
         let bytes = fs::read(path).unwrap();
 
         let magic = &bytes[0..4];
         if magic != ELF_MAGIC {
-            return Err("Incorrect magic".to_string());
+            panic!("ELF '{}': magic check failed", path.display());
         }
 
         let word_size;
@@ -159,7 +157,7 @@ impl ElfFile {
                 hdr_size = std::mem::size_of::<ElfHeader64>();
                 word_size = ElfWordSize::SixtyFour;
             },
-            _ => return Err(format!("Invalid class '{}'", class)),
+            _ => panic!("ELF '{}': invalid class '{}'", path.display(), class),
         };
 
         // Now need to read the header into a struct
@@ -169,6 +167,11 @@ impl ElfFile {
         let (head, body, _tail) = unsafe { hdr_bytes.align_to::<ElfHeader64>() };
         assert!(head.is_empty(), "Data was not aligned");
         let hdr = &body[0];
+
+        if hdr.ident_data != 1 {
+            panic!("ELF '{}': incorrect endianness, only little endian architectures are supported", path.display());
+        }
+
         let entry = hdr.entry;
 
         // Read all the segments
@@ -217,12 +220,12 @@ impl ElfFile {
         }
 
         if shstrtab_shent.is_none() {
-            return Err("Unable to find string table section".to_string());
+            panic!("ELF '{}': unable to find string table section", path.display());
         }
 
         assert!(!symtab_shent.is_none());
         if symtab_shent.is_none() {
-            return Err("Unable to find symbol table section".to_string());
+            panic!("ELF '{}': unable to find symbol table section", path.display());
         }
 
         // Reading the symbol table
@@ -249,7 +252,7 @@ impl ElfFile {
             offset += symbol_size;
         }
 
-        Ok(ElfFile { word_size, entry, segments, symbols })
+        ElfFile { word_size, entry, segments, symbols }
     }
 
     pub fn find_symbol(&self, variable_name: &str) -> (u64, u64) {

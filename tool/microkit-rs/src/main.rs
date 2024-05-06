@@ -16,6 +16,7 @@ use sel4::{Invocation, InvocationArgs, ObjectType, Rights, PageSize, Aarch64Regs
 use std::io::{Write, BufWriter};
 use std::mem::size_of;
 use loader::Loader;
+use util::struct_to_bytes;
 
 const MAX_PDS: usize = 64;
 // It should be noted that if you were to change the value of
@@ -1027,7 +1028,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     // TODO: remove unwraps
     let elf_files: Vec<(&ProtectionDomain, ElfFile)> = system.protection_domains
                                                     .iter()
-                                                    .map(|pd| (pd, ElfFile::from_path(&get_full_path(&pd.program_image, &search_paths).unwrap()).unwrap()))
+                                                    .map(|pd| (pd, ElfFile::from_path(&get_full_path(&pd.program_image, &search_paths).unwrap())))
                                                     .collect();
     // TODO: let's go with this hashmap for now, but unsure if it's the correct method.
     let mut pd_elf_files: HashMap<&ProtectionDomain, ElfFile> = elf_files.into_iter().collect();
@@ -2209,8 +2210,8 @@ fn main() {
 
     // TODO: need to test what happens when these paths do not exist
     // and do error checking.
-    let kernel_elf = ElfFile::from_path(Path::new("testing/sel4.elf")).unwrap();
-    let mut monitor_elf = ElfFile::from_path(Path::new(monitor_elf_path)).unwrap();
+    let kernel_elf = ElfFile::from_path(Path::new("testing/sel4.elf"));
+    let mut monitor_elf = ElfFile::from_path(Path::new(monitor_elf_path));
 
     if monitor_elf.segments.len() > 1 {
         panic!("Monitor ({}) has {} segments, it must only have one", monitor_elf_path, monitor_elf.segments.len());
@@ -2282,9 +2283,9 @@ fn main() {
                                                             is_device: ut.is_device as u64,
                                                         })
                                                         .collect();
-    let mut untyped_info_data: Vec<u8> = Vec::from(unsafe { util::any_as_u8_slice(&untyped_info_header) });
+    let mut untyped_info_data: Vec<u8> = Vec::from(unsafe { struct_to_bytes(&untyped_info_header) });
     for o in &untyped_info_object_data {
-        untyped_info_data.extend(unsafe { util::any_as_u8_slice(o) });
+        untyped_info_data.extend(unsafe { struct_to_bytes(o) });
     }
     monitor_elf.write_symbol(monitor_config.untyped_info_symbol_name, &untyped_info_data);
 

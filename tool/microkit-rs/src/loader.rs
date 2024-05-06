@@ -1,5 +1,5 @@
 use crate::{ElfFile, MemoryRegion};
-use crate::util::{round_up, mb, kb, mask, any_as_u8_slice};
+use crate::util::{round_up, mb, kb, mask, struct_to_bytes};
 use crate::elf::ElfWordSize;
 use std::path::Path;
 use std::fs::File;
@@ -87,10 +87,7 @@ impl<'a> Loader<'a> {
         // Note: If initial_task_phys_base is not None, then it just this address
         // as the base physical address of the initial task, rather than the address
         // that comes from the initial_task_elf file.
-        let elf = match ElfFile::from_path(loader_elf_path) {
-            Ok(e) => e,
-            Err(err) => panic!("Could not load loader ELF with path '{:?}': {}", loader_elf_path, err),
-        };
+        let elf = ElfFile::from_path(loader_elf_path);
         let sz = elf.word_size;
         let magic = match sz {
             ElfWordSize::ThirtyTwo => 0x5e14dead,
@@ -243,11 +240,11 @@ impl<'a> Loader<'a> {
         loader_buf.write(self.image.as_slice()).expect("Failed to write image data to loader");
 
         // Then we write out the loader metadata (known as the 'header')
-        let header_bytes = unsafe { any_as_u8_slice(&self.header) };
+        let header_bytes = unsafe { struct_to_bytes(&self.header) };
         loader_buf.write(header_bytes).expect("Failed to write header data to loader");
         // For each region, we need to write out the region metadata as well
         for region in &self.region_metadata {
-            let region_metadata_bytes = unsafe { any_as_u8_slice(region) };
+            let region_metadata_bytes = unsafe { struct_to_bytes(region) };
             loader_buf.write(region_metadata_bytes).expect("Failed to write region metadata to loader");
         }
 

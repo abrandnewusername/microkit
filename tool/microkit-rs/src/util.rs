@@ -110,8 +110,9 @@ pub fn human_size_strict(size: u64) -> String {
     panic!("should never reach here in human_size_strict");
 }
 
-// TODO: get rid of this and do it all inline
-pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+/// Convert a struct into raw bytes in order to be written to
+/// disk or some other format.
+pub unsafe fn struct_to_bytes<T: Sized>(p: &T) -> &[u8] {
     ::core::slice::from_raw_parts(
         (p as *const T) as *const u8,
         ::core::mem::size_of::<T>(),

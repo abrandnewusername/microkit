@@ -391,7 +391,7 @@ impl Invocation {
     /// into raw bytes that will be given to the monitor to interpret
     /// at runtime.
     /// Appends to the given data
-    pub fn add_raw_invocation(&self, _data: &mut Vec<u8>) {
+    pub fn add_raw_invocation(&self, data: &mut Vec<u8>) {
         let (service, args, extra_caps): (u64, Vec<u64>, Vec<u64>) = self.args.get_args();
 
         // TODO: use into() instead?
@@ -410,6 +410,13 @@ impl Invocation {
         let mut all_args = vec![tag, service];
         all_args.extend(extra_caps);
         all_args.extend(args);
+
+        for arg in all_args {
+            data.extend(arg.to_le_bytes());
+        }
+        for arg in extra {
+            data.extend(arg.to_le_bytes());
+        }
     }
 
     // TODO: count should probably be usize...
