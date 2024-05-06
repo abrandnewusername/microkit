@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::collections::HashMap;
 
 #[repr(C, packed)]
 struct ElfHeader32 {
@@ -129,7 +130,7 @@ pub struct ElfFile {
     pub entry: u64,
     pub segments: Vec<ElfSegment>,
     // TODO: figure out how to have this struct be generic for 64-bit and 32-bit?
-    symbols: Vec<(String, ElfSymbol64)>,
+    symbols: HashMap<String, ElfSymbol64>,
 }
 
 impl ElfFile {
@@ -239,7 +240,7 @@ impl ElfFile {
         let symtab_str = &bytes[symtab_str_start..symtab_str_end];
 
         // Read all the symbols
-        let mut symbols = Vec::new();
+        let mut symbols: HashMap<String, ElfSymbol64> = HashMap::new();
         let mut offset = 0;
         let symbol_size = std::mem::size_of::<ElfSymbol64>();
         while offset < symtab.len() {
@@ -248,7 +249,9 @@ impl ElfFile {
             assert!(sym_head.is_empty(), "symbol data was not aligned");
             let sym = sym_body[0];
             let name = Self::get_string(symtab_str, sym.name as usize);
-            symbols.push((name.to_string(), sym));
+            // TODO: check that symbol does not already exist
+            // TODO: could potentially get rid of this allocation....
+            symbols.insert(name.to_string(), sym);
             offset += symbol_size;
         }
 
@@ -256,26 +259,30 @@ impl ElfFile {
     }
 
     pub fn find_symbol(&self, variable_name: &str) -> (u64, u64) {
-        let mut found_sym: Option<&ElfSymbol64> = None;
-        for (name, sym) in &self.symbols {
-            if name == variable_name {
-                if found_sym.is_none() {
-                    found_sym = Some(sym);
-                } else {
-                    // TODO: return error instead?
-                    // TODO: have path of ELF file?
-                    panic!("Multiple symbols with name {}", variable_name);
-                }
-            }
-        }
+        // let mut found_sym: Option<&ElfSymbol64> = None;
+        // for (name, sym) in &self.symbols {
+        //     if name == variable_name {
+        //         if found_sym.is_none() {
+        //             found_sym = Some(sym);
+        //         } else {
+        //             // TODO: return error instead?
+        //             // TODO: have path of ELF file?
+        //             panic!("Multiple symbols with name {}", variable_name);
+        //         }
+        //     }
+        // }
 
-        if found_sym.is_none() {
-            // TODO: return error instead?
-            // TODO: have path of ELF file?
-            panic!("No symbol named {} found", variable_name);
-        }
+        // if found_sym.is_none() {
+        //     // TODO: return error instead?
+        //     // TODO: have path of ELF file?
+        //     panic!("No symbol named {} found", variable_name);
+        // }
 
-        (found_sym.unwrap().value, found_sym.unwrap().size)
+        // (found_sym.unwrap().value, found_sym.unwrap().size)
+
+        // TODO: don't unwrap!
+        let sym = self.symbols.get(variable_name).unwrap();
+        (sym.value, sym.size)
     }
 
     pub fn write_symbol(&mut self, variable_name: &str, data: &[u8]) {
