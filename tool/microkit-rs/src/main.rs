@@ -635,7 +635,7 @@ impl KernelObjectAllocator {
     }
 }
 
-struct BuiltSystem<'a> {
+struct BuiltSystem {
     number_of_system_caps: u64,
     invocation_data_size: u64,
     bootstrap_invocations: Vec<Invocation>,
@@ -652,7 +652,6 @@ struct BuiltSystem<'a> {
     kernel_objects: Vec<KernelObject>,
     initial_task_virt_region: MemoryRegion,
     initial_task_phys_region: MemoryRegion,
-    pd_elf_files: HashMap<&'a ProtectionDomain, ElfFile>,
 }
 
 /// Determine the physical memory regions for an ELF file with a given
@@ -981,7 +980,7 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
         let cap = i as u64 + first_untyped_cap;
         untyped_objects.push(UntypedObject::new(cap, *r, true));
     }
-    let normal_regions_start_cap = first_untyped_cap + device_regions.len() as u64 + 1;
+    let normal_regions_start_cap = first_untyped_cap + device_regions.len() as u64;
     for (i, r) in normal_regions.iter().enumerate() {
         let cap = i as u64 + normal_regions_start_cap;
         untyped_objects.push(UntypedObject::new(cap, *r, false));
@@ -1004,7 +1003,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
                     system: &'a SystemDescription,
                     invocation_table_size: u64,
                     system_cnode_size: u64,
-                    search_paths: &Vec<&str>) -> BuiltSystem<'a> {
+                    search_paths: &Vec<&str>) -> BuiltSystem {
     assert!(util::is_power_of_two(system_cnode_size));
     assert!(invocation_table_size % kernel_config.minimum_page_size == 0);
     assert!(invocation_table_size <= MAX_SYSTEM_INVOCATION_SIZE);
@@ -1077,6 +1076,16 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         initial_task_virt_region,
         reserved_region
     );
+
+    for ut in &kernel_boot_info.untyped_objects {
+        let dev_str = if ut.is_device {
+            " (device)"
+        } else {
+            ""
+        };
+        let ut_str = format!("Untyped @ 0x{:x}:0x{:x}{}", ut.region.base, ut.region.size(), dev_str);
+        cap_address_names.insert(ut.cap, ut_str);
+    }
 
     // The kernel boot info allows us to create an allocator for kernel objects
     let mut kao = KernelObjectAllocator::new(&kernel_boot_info);
@@ -1291,12 +1300,12 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     }));
     cap_slot += page_tables_required;
 
-    let vaddr: u64 = 0x8000_0000;
+    let page_table_vaddr: u64 = 0x8000_0000;
     // Now that the page tables are allocated they can be mapped into vspace
     let mut pt_map_invocation = Invocation::new(InvocationArgs::PageTableMap{
         page_table: system_cap_address_mask | base_page_table_cap,
         vspace: INIT_VSPACE_CAP_ADDRESS,
-        vaddr: vaddr,
+        vaddr: page_table_vaddr,
         attr: SEL4_ARM_DEFAULT_VMATTRIBUTES,
     });
     pt_map_invocation.repeat(page_tables_required, InvocationArgs::PageTableMap{
@@ -1308,10 +1317,11 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     bootstrap_invocations.push(pt_map_invocation);
 
     // Finally, once the page tables are allocated the pages can be mapped
+    let page_vaddr: u64 = 0x8000_0000;
     let mut map_invocation = Invocation::new(InvocationArgs::PageMap{
         page: system_cap_address_mask | base_page_cap,
         vspace: INIT_VSPACE_CAP_ADDRESS,
-        vaddr: vaddr,
+        vaddr: page_vaddr,
         rights: Rights::Read as u64,
         attr: SEL4_ARM_DEFAULT_VMATTRIBUTES | SEL4_ARM_EXECUTE_NEVER
     });
@@ -1656,14 +1666,15 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     }
 
     // This has to be done prior to minting!
-    let mut invocation = Invocation::new(InvocationArgs::AsidPoolAssign {
+    let mut asid_invocation = Invocation::new(InvocationArgs::AsidPoolAssign {
         asid_pool: INIT_ASID_POOL_CAP_ADDRESS,
         vspace: vspace_objs[0].cap_addr,
     });
-    invocation.repeat(system.protection_domains.len() as u64, InvocationArgs::AsidPoolAssign{
+    asid_invocation.repeat(system.protection_domains.len() as u64, InvocationArgs::AsidPoolAssign{
         asid_pool: 0,
         vspace: 1,
     });
+    system_invocations.push(asid_invocation);
 
     // Create copies of all caps required via minting.
 
@@ -1683,7 +1694,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
                 if mp.perms & SysMapPerms::Write as u8 != 0 {
                     rights |= Rights::Write as u64;
                 }
-                if mp.perms & SysMapPerms::Execute as u8 != 0 {
+                if mp.perms & SysMapPerms::Execute as u8 == 0 {
                     attrs |= SEL4_ARM_EXECUTE_NEVER;
                 }
                 if mp.cached {
@@ -1718,7 +1729,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
                 page_descriptors.push((
                     system_cap_address_mask | cap_slot,
                     pd_idx,
-                    vaddr,
+                    mp.vaddr,
                     rights,
                     attrs,
                     mr_pages[mr].len() as u64,
@@ -2009,7 +2020,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
             vaddr: vaddr_incr,
             rights: 0,
             attr: 0,
-        })
+        });
+        system_invocations.push(invocation);
     }
 
     // And, finally, map all the IPC buffers
@@ -2167,7 +2179,6 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         kernel_objects,
         initial_task_phys_region,
         initial_task_virt_region,
-        pd_elf_files,
     }
 }
 
@@ -2348,6 +2359,11 @@ fn main() {
     }
     _ = writeln!(&mut report_buf, "\n# Bootstrap Kernel Invocations Detail\n");
     for (i, invocation) in built_system.bootstrap_invocations.iter().enumerate() {
+        _ = write!(&mut report_buf, "    0x{:04x} ", i);
+        invocation.report_fmt(&mut report_buf, &built_system.cap_lookup);
+    }
+    _ = writeln!(&mut report_buf, "\n# System Kernel Invocations Detail\n");
+    for (i, invocation) in built_system.system_invocations.iter().enumerate() {
         _ = write!(&mut report_buf, "    0x{:04x} ", i);
         invocation.report_fmt(&mut report_buf, &built_system.cap_lookup);
     }

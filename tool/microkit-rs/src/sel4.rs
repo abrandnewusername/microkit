@@ -58,7 +58,7 @@ impl ObjectType {
         } else {
             "variable size".to_string()
         };
-        format!("         object_type:         {} ({} - {})", *self as u64, self.to_str(), object_size)
+        format!("         object_type          {} ({} - {})", *self as u64, self.to_str(), object_size)
     }
 }
 
@@ -262,6 +262,47 @@ impl Aarch64Regs {
         }
     }
 
+    pub fn field_names(&self) -> [(&'static str, u64); 36] {
+        [
+            ("pc", self.pc),
+            ("sp", self.sp),
+            ("spsr", self.spsr),
+            ("x0", self.x0),
+            ("x1", self.x1),
+            ("x2", self.x2),
+            ("x3", self.x3),
+            ("x4", self.x4),
+            ("x5", self.x5),
+            ("x6", self.x6),
+            ("x7", self.x7),
+            ("x8", self.x8),
+            ("x16", self.x16),
+            ("x17", self.x17),
+            ("x18", self.x18),
+            ("x29", self.x29),
+            ("x30", self.x30),
+            ("x9", self.x9),
+            ("x10", self.x10),
+            ("x11", self.x11),
+            ("x12", self.x12),
+            ("x13", self.x13),
+            ("x14", self.x14),
+            ("x15", self.x15),
+            ("x19", self.x19),
+            ("x20", self.x20),
+            ("x21", self.x21),
+            ("x22", self.x22),
+            ("x23", self.x23),
+            ("x24", self.x24),
+            ("x25", self.x25),
+            ("x26", self.x26),
+            ("x27", self.x27),
+            ("x28", self.x28),
+            ("tpidr_el0", self.tpidr_el0),
+            ("tpidrro_el0", self.tpidrro_el0),
+        ]
+    }
+
     pub fn as_slice(&self) -> [u64; 36] {
         [
             self.pc,
@@ -386,42 +427,145 @@ impl Invocation {
         label << 12 | caps << 9 | extra_caps << 7 | length
     }
 
-    fn format_field(field_name: &'static str, value: String) -> String {
+    fn fmt_field(field_name: &'static str, value: u64) -> String {
         format!("         {:<20} {}", field_name, value)
     }
 
+    fn fmt_field_str(field_name: &'static str, value: String) -> String {
+        format!("         {:<20} {}", field_name, value)
+    }
+
+    fn fmt_field_hex(field_name: &'static str, value: u64) -> String {
+        format!("         {:<20} 0x{:x}", field_name, value)
+    }
+
+    fn fmt_field_reg(reg: &'static str, value: u64) -> String {
+        format!("         {}: 0x{:016x}", reg, value)
+    }
+
+    fn fmt_field_bool(field_name: &'static str, value: bool) -> String {
+        format!("         {:<20} {}", field_name, value.to_string())
+    }
+
+    fn fmt_field_cap(field_name: &'static str, cap: u64, cap_lookup: &HashMap<u64, String>) -> String {
+        // TODO: this if let should not exist
+        let s = if let Some(name) = cap_lookup.get(&cap) {
+            name
+        } else {
+            "None"
+        };
+        let field = format!("{} (cap)", field_name);
+        format!("         {:<20} 0x{:016x} ({})", field, cap, s)
+    }
+
+    // TODO: this function could be a lot more ergonomic. While I do not want to
+    // resort to macros necessarily, we could use stringify or something? I don't know
     pub fn report_fmt(&self, f: &mut BufWriter<File>, cap_lookup: &HashMap<u64, String>) {
         let mut arg_strs = Vec::new();
-        let service_str = match self.args {
+        let (service, service_str) = match self.args {
             InvocationArgs::UntypedRetype { untyped, object_type, size_bits, root, node_index, node_depth, node_offset, num_objects } => {
                 arg_strs.push(object_type.format());
-                arg_strs.push(Invocation::format_field("size_bits", size_bits.to_string()));
-                arg_strs.push(Invocation::format_field("root (cap)", format!("0x{:016x}", root)));
-                arg_strs.push(Invocation::format_field("node_index", node_index.to_string()));
-                arg_strs.push(Invocation::format_field("node_depth", node_depth.to_string()));
-                arg_strs.push(Invocation::format_field("node_offset", node_offset.to_string()));
-                arg_strs.push(Invocation::format_field("num_objects", num_objects.to_string()));
-                cap_lookup.get(&untyped).unwrap()
-            },
-            // InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } =>
-            // InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
-            // InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } =>
-            // InvocationArgs::TcbResume { tcb } =>
-            // InvocationArgs::TcbWriteRegisters { tcb, resume, arch_flags, regs, count } =>
-            // InvocationArgs::TcbBindNotification { tcb, notification } =>
-            // InvocationArgs::AsidPoolAssign { asid_pool, vspace } =>
+                let sz_fmt = if size_bits == 0 {
+                    String::from("N/A")
+                } else {
+                    format!("0x{:x}", 1 << size_bits)
+                };
+                arg_strs.push(Invocation::fmt_field_str("size_bits", format!("{} ({})", size_bits, sz_fmt)));
+                arg_strs.push(Invocation::fmt_field_cap("root", root, cap_lookup));
+                arg_strs.push(Invocation::fmt_field("node_index", node_index));
+                arg_strs.push(Invocation::fmt_field("node_depth", node_depth));
+                arg_strs.push(Invocation::fmt_field("node_offset", node_offset));
+                arg_strs.push(Invocation::fmt_field("num_objects", num_objects));
+                (untyped, cap_lookup.get(&untyped).unwrap())
+            }
+            InvocationArgs::TcbSetSchedParams { tcb, authority, mcp, priority, sched_context, fault_ep } => {
+                arg_strs.push(Invocation::fmt_field_cap("authority", authority, cap_lookup));
+                arg_strs.push(Invocation::fmt_field("mcp", mcp));
+                arg_strs.push(Invocation::fmt_field("priority", priority));
+                arg_strs.push(Invocation::fmt_field_cap("sched_context", sched_context, cap_lookup));
+                arg_strs.push(Invocation::fmt_field_cap("fault_ep", fault_ep, cap_lookup));
+                (tcb, cap_lookup.get(&tcb).unwrap())
+            }
+            InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } => {
+                arg_strs.push(Invocation::fmt_field_cap("fault_ep", fault_ep, cap_lookup));
+                arg_strs.push(Invocation::fmt_field_cap("cspace_root", cspace_root, cap_lookup));
+                arg_strs.push(Invocation::fmt_field("cspace_root_data", cspace_root_data));
+                arg_strs.push(Invocation::fmt_field_cap("vspace_root", vspace_root, cap_lookup));
+                arg_strs.push(Invocation::fmt_field("vspace_root_data", vspace_root_data));
+                (tcb, cap_lookup.get(&tcb).unwrap())
+            }
+            InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } => {
+                arg_strs.push(Invocation::fmt_field_hex("buffer", buffer));
+                arg_strs.push(Invocation::fmt_field_cap("buffer_frame", buffer_frame, cap_lookup));
+                (tcb, cap_lookup.get(&tcb).unwrap())
+            }
+            InvocationArgs::TcbResume { tcb } => {
+                (tcb, cap_lookup.get(&tcb).unwrap())
+            }
+            InvocationArgs::TcbWriteRegisters { tcb, resume, arch_flags, regs, .. } => {
+                arg_strs.push(Invocation::fmt_field_bool("resume", resume));
+                arg_strs.push(Invocation::fmt_field("arch_flags", arch_flags as u64));
+
+                let reg_strs = regs.field_names()
+                                   .into_iter()
+                                   .map(|(field, val)| Invocation::fmt_field_reg(field, val))
+                                   .collect::<Vec<_>>();
+                arg_strs.push(Invocation::fmt_field_str("regs", reg_strs[0].clone()));
+                for s in &reg_strs[1..] {
+                    arg_strs.push(s.clone());
+                }
+
+                (tcb, cap_lookup.get(&tcb).unwrap())
+            }
+            InvocationArgs::TcbBindNotification { tcb, notification } => {
+                arg_strs.push(Invocation::fmt_field_cap("notification", notification, cap_lookup));
+                (tcb, cap_lookup.get(&tcb).unwrap())
+            }
+            InvocationArgs::AsidPoolAssign { asid_pool, vspace } => {
+                arg_strs.push(Invocation::fmt_field_cap("vspace", vspace, cap_lookup));
+                (asid_pool, cap_lookup.get(&asid_pool).unwrap())
+            }
             // InvocationArgs::IrqControlGetTrigger { irq_control, irq, trigger, dest_root, dest_index, dest_depth } =>
             // InvocationArgs::IrqHandlerSetNotification { irq_handler, notification } =>
-            // InvocationArgs::PageTableMap { page_table, vspace, vaddr, attr } =>
-            // InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } =>
-            // InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
-            // InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>
+            InvocationArgs::PageTableMap { page_table, vspace, vaddr, attr } => {
+                arg_strs.push(Invocation::fmt_field_cap("vspace", vspace, cap_lookup));
+                arg_strs.push(Invocation::fmt_field_hex("vaddr", vaddr));
+                arg_strs.push(Invocation::fmt_field("attr", attr));
+                (page_table, cap_lookup.get(&page_table).unwrap())
+            }
+            InvocationArgs::PageMap { page, vspace, vaddr, rights, attr } => {
+                arg_strs.push(Invocation::fmt_field_cap("vspace", vspace, cap_lookup));
+                arg_strs.push(Invocation::fmt_field_hex("vaddr", vaddr));
+                arg_strs.push(Invocation::fmt_field("rights", rights));
+                arg_strs.push(Invocation::fmt_field("attr", attr));
+                (page, cap_lookup.get(&page).unwrap())
+            }
+            InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } => {
+                arg_strs.push(Invocation::fmt_field("dest_index", dest_index));
+                arg_strs.push(Invocation::fmt_field("dest_depth", dest_depth));
+                arg_strs.push(Invocation::fmt_field_cap("src_root", src_root, cap_lookup));
+                arg_strs.push(Invocation::fmt_field_cap("src_obj", src_obj, cap_lookup));
+                arg_strs.push(Invocation::fmt_field("src_depth", src_depth));
+                arg_strs.push(Invocation::fmt_field("rights", rights));
+                arg_strs.push(Invocation::fmt_field("badge", badge));
+                (cnode, cap_lookup.get(&cnode).unwrap())
+            }
+            InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } => {
+                arg_strs.push(Invocation::fmt_field_cap("schedcontext", sched_context, cap_lookup));
+                arg_strs.push(Invocation::fmt_field("budget", budget));
+                arg_strs.push(Invocation::fmt_field("period", period));
+                arg_strs.push(Invocation::fmt_field("extra_refills", extra_refills));
+                arg_strs.push(Invocation::fmt_field("badge", badge));
+                arg_strs.push(Invocation::fmt_field("flags", flags));
+                // TODO: fix, don't know why this one doesn't have a lookup? Is this a mistake from Benno?
+                (sched_control, &String::from("None"))
+            }
             _ => {
                 arg_strs.push(format!("TODO for {}", self.label as u64));
-                panic!("tiodo")
+                (0, &String::from("TODO"))
             }
         };
-        _ = write!(f, "{:<20} - {:<17} - 0x{:016x} ({})\n{}\n", self.object_type(), self.method_name(), 1, service_str, arg_strs.join("\n"))
+        _ = write!(f, "{:<20} - {:<17} - 0x{:016x} ({})\n{}\n", self.object_type(), self.method_name(), service, service_str, arg_strs.join("\n"))
     }
 
     pub fn object_type(&self) -> &'static str {
