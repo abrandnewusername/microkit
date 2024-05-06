@@ -110,6 +110,24 @@ pub fn human_size_strict(size: u64) -> String {
     panic!("should never reach here in human_size_strict");
 }
 
+/// Take an integer, such as 1000000 and add commas such as:
+/// 1,000,000.
+pub fn comma_sep_u64(n: u64) -> String {
+    let mut s = String::new();
+    for (i, val) in n.to_string().chars().rev().enumerate() {
+        if i != 0 && i % 3 == 0 {
+            s.insert(0, ',');
+        }
+        s.insert(0, val);
+    }
+
+    s
+}
+
+pub fn comma_sep_usize(n: usize) -> String {
+    comma_sep_u64(n as u64)
+}
+
 /// Convert a struct into raw bytes in order to be written to
 /// disk or some other format.
 pub unsafe fn struct_to_bytes<T: Sized>(p: &T) -> &[u8] {

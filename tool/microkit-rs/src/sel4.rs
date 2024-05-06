@@ -109,7 +109,7 @@ pub enum ArmIrqTrigger {
 }
 
 #[repr(u32)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 enum InvocationLabel {
     // Untyped
@@ -403,8 +403,8 @@ impl Invocation {
             tag |= (count - 1) << 32;
             let (repeat_service, repeat_args, repeat_extra_caps) = repeat.get_args();
             extra.push(repeat_service);
-            extra.extend(repeat_args);
             extra.extend(repeat_extra_caps);
+            extra.extend(repeat_args);
         }
 
         let mut all_args = vec![tag, service];
@@ -422,7 +422,9 @@ impl Invocation {
     // TODO: count should probably be usize...
     pub fn repeat(&mut self, count: u64, repeat_args: InvocationArgs) {
         assert!(self.repeat.is_none());
-        self.repeat = Some((count, repeat_args));
+        if count > 1 {
+            self.repeat = Some((count, repeat_args));
+        }
     }
 
     pub fn message_info_new(label: u64, caps: u64, extra_caps: u64, length: u64) -> u64 {
@@ -634,7 +636,7 @@ impl InvocationArgs {
             InvocationArgs::TcbSetSpace { tcb, fault_ep, cspace_root, cspace_root_data, vspace_root, vspace_root_data } =>
                                         (
                                             tcb,
-                                            vec![tcb, cspace_root_data, vspace_root_data],
+                                            vec![cspace_root_data, vspace_root_data],
                                             vec![fault_ep, cspace_root, vspace_root]
                                         ),
             InvocationArgs::TcbSetIpcBuffer { tcb, buffer, buffer_frame } => (tcb, vec![buffer], vec![buffer_frame]),
@@ -666,7 +668,7 @@ impl InvocationArgs {
             InvocationArgs::CnodeMint { cnode, dest_index, dest_depth, src_root, src_obj, src_depth, rights, badge } =>
                                         (
                                             cnode,
-                                            vec![dest_index, dest_depth, src_root, src_obj, src_depth, rights as u64, badge],
+                                            vec![dest_index, dest_depth, src_obj, src_depth, rights as u64, badge],
                                             vec![src_root]
                                         ),
             InvocationArgs::SchedControlConfigureFlags { sched_control, sched_context, budget, period, extra_refills, badge, flags } =>

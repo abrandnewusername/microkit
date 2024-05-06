@@ -16,7 +16,7 @@ use sel4::{Invocation, InvocationArgs, ObjectType, Rights, PageSize, Aarch64Regs
 use std::io::{Write, BufWriter};
 use std::mem::size_of;
 use loader::Loader;
-use util::struct_to_bytes;
+use util::{struct_to_bytes, comma_sep_usize, comma_sep_u64};
 
 const MAX_PDS: usize = 64;
 // It should be noted that if you were to change the value of
@@ -638,6 +638,7 @@ impl KernelObjectAllocator {
 
 struct BuiltSystem {
     number_of_system_caps: u64,
+    invocation_data: Vec<u8>,
     invocation_data_size: u64,
     bootstrap_invocations: Vec<Invocation>,
     system_invocations: Vec<Invocation>,
@@ -2166,6 +2167,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     BuiltSystem {
         number_of_system_caps: final_cap_slot,
         invocation_data_size: system_invocation_data.len() as u64,
+        invocation_data: system_invocation_data,
         bootstrap_invocations: bootstrap_invocations,
         system_invocations: system_invocations,
         kernel_boot_info: kernel_boot_info,
@@ -2237,7 +2239,7 @@ fn main() {
             system_cnode_size,
             &search_paths
         );
-        println!("BUILT: system_cnode_size={}, built_system.number_of_system_caps={} invocation_table_size={} built_system.invocation_data_size={}",
+        println!("BUILT: system_cnode_size={} built_system.number_of_system_caps={} invocation_table_size={} built_system.invocation_data_size={}",
                  system_cnode_size, built_system.number_of_system_caps, invocation_table_size, built_system.invocation_data_size);
 
         if built_system.number_of_system_caps <= system_cnode_size &&
@@ -2289,8 +2291,10 @@ fn main() {
     }
     monitor_elf.write_symbol(monitor_config.untyped_info_symbol_name, &untyped_info_data);
 
-    let bootstrap_invocation_data: Vec<u8> = Vec::new();
-    let system_invocation_data: Vec<u8> = Vec::new();
+    let mut bootstrap_invocation_data: Vec<u8> = Vec::new();
+    for invocation in &built_system.bootstrap_invocations {
+        invocation.add_raw_invocation(&mut bootstrap_invocation_data);
+    }
 
     monitor_elf.write_symbol(monitor_config.bootstrap_invocation_count_symbol_name, &built_system.bootstrap_invocations.len().to_le_bytes());
     monitor_elf.write_symbol(monitor_config.system_invocation_count_symbol_name, &built_system.system_invocations.len().to_le_bytes());
@@ -2333,10 +2337,10 @@ fn main() {
 
     // TODO: this is a lot of error ignoring...
     // TODO: need to match formatting with Python
-    _ = writeln!(&mut report_buf, "    # of fixed caps     : {:>8}", built_system.kernel_boot_info.fixed_cap_count);
-    _ = writeln!(&mut report_buf, "    # of page table caps: {:>8}", built_system.kernel_boot_info.paging_cap_count);
-    _ = writeln!(&mut report_buf, "    # of page caps      : {:>8}", built_system.kernel_boot_info.page_cap_count);
-    _ = writeln!(&mut report_buf, "    # of untyped objects: {:>8}", built_system.kernel_boot_info.untyped_objects.len());
+    _ = writeln!(&mut report_buf, "    # of fixed caps     : {:>8}", comma_sep_u64(built_system.kernel_boot_info.fixed_cap_count));
+    _ = writeln!(&mut report_buf, "    # of page table caps: {:>8}", comma_sep_u64(built_system.kernel_boot_info.paging_cap_count));
+    _ = writeln!(&mut report_buf, "    # of page caps      : {:>8}", comma_sep_u64(built_system.kernel_boot_info.page_cap_count));
+    _ = writeln!(&mut report_buf, "    # of untyped objects: {:>8}", comma_sep_usize(built_system.kernel_boot_info.untyped_objects.len()));
     _ = writeln!(&mut report_buf, "\n# Loader Regions\n");
     for region in built_system.regions {
         _ = writeln!(&mut report_buf, "       {}", region);
@@ -2345,13 +2349,13 @@ fn main() {
     _ = writeln!(&mut report_buf, "     virtual memory : {}", built_system.initial_task_virt_region);
     _ = writeln!(&mut report_buf, "     physical memory: {}", built_system.initial_task_phys_region);
     _ = writeln!(&mut report_buf, "\n# Allocated Kernel Objects Summary\n");
-    _ = writeln!(&mut report_buf, "     # of allocated objects: {}", built_system.kernel_objects.len());
+    _ = writeln!(&mut report_buf, "     # of allocated objects: {}", comma_sep_usize(built_system.kernel_objects.len()));
     _ = writeln!(&mut report_buf, "\n# Bootstrap Kernel Invocations Summary\n");
-    _ = writeln!(&mut report_buf, "     # of invocations   : {:>10}", built_system.bootstrap_invocations.len());
-    _ = writeln!(&mut report_buf, "     size of invocations: {:>10}", bootstrap_invocation_data.len());
+    _ = writeln!(&mut report_buf, "     # of invocations   : {:>10}", comma_sep_usize(built_system.bootstrap_invocations.len()));
+    _ = writeln!(&mut report_buf, "     size of invocations: {:>10}", comma_sep_usize(bootstrap_invocation_data.len()));
     _ = writeln!(&mut report_buf, "\n# System Kernel Invocations Summary\n");
-    _ = writeln!(&mut report_buf, "     # of invocations   : {:>10}", built_system.system_invocations.len());
-    _ = writeln!(&mut report_buf, "     size of invocations: {:>10}", system_invocation_data.len());
+    _ = writeln!(&mut report_buf, "     # of invocations   : {:>10}", comma_sep_usize(built_system.system_invocations.len()));
+    _ = writeln!(&mut report_buf, "     size of invocations: {:>10}", comma_sep_usize(built_system.invocation_data.len()));
     _ = writeln!(&mut report_buf, "\n# Allocated Kernel Objects Detail\n");
     for ko in &built_system.kernel_objects {
         // TODO: don't use debug display for object type
@@ -2378,7 +2382,7 @@ fn main() {
         Some(built_system.initial_task_phys_region.base),
         built_system.reserved_region,
         // TODO: this is wrong, we need all the regions not just these
-        vec![(built_system.reserved_region.base, &system_invocation_data)]
+        vec![(built_system.reserved_region.base, &built_system.invocation_data)]
     );
     loader.write_image(&Path::new("testing/loader.img"))
 }
