@@ -397,25 +397,31 @@ impl Invocation {
         // TODO: use into() instead?
         let label_num = self.label as u64;
         let mut tag = Invocation::message_info_new(label_num, 0, extra_caps.len() as u64, args.len() as u64);
-        let mut extra = vec![];
         if let Some((count, repeat)) = self.repeat {
             // TODO: can we somehow check that the variant of repeat InvocationArgs is the same as the invocation?
             tag |= (count - 1) << 32;
+        }
+
+        data.reserve(args.len() + extra_caps.len());
+
+        data.extend(tag.to_le_bytes());
+        data.extend(service.to_le_bytes());
+        for arg in extra_caps {
+            data.extend(arg.to_le_bytes());
+        }
+        for arg in args {
+            data.extend(arg.to_le_bytes());
+        }
+
+        if let Some((count, repeat)) = self.repeat {
             let (repeat_service, repeat_args, repeat_extra_caps) = repeat.get_args();
-            extra.push(repeat_service);
-            extra.extend(repeat_extra_caps);
-            extra.extend(repeat_args);
-        }
-
-        let mut all_args = vec![tag, service];
-        all_args.extend(extra_caps);
-        all_args.extend(args);
-
-        for arg in all_args {
-            data.extend(arg.to_le_bytes());
-        }
-        for arg in extra {
-            data.extend(arg.to_le_bytes());
+            data.extend(repeat_service.to_le_bytes());
+            for cap in repeat_extra_caps {
+                data.extend(cap.to_le_bytes());
+            }
+            for arg in repeat_args {
+                data.extend(arg.to_le_bytes());
+            }
         }
     }
 

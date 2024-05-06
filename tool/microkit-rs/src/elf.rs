@@ -187,9 +187,7 @@ impl ElfFile {
             let phent = &phent_body[0];
             // TODO: sort out conversions
             let data = &bytes[phent.offset as usize..(phent.offset + phent.filesz) as usize];
-            // TODO: there is probably a better way of putting the data and zeroes together
-            let mut segment_data = Vec::from(data);
-            segment_data.extend(vec![0; (phent.memsz - phent.filesz) as usize]);
+            let segment_data = [data, &vec![0; (phent.memsz - phent.filesz) as usize]].concat();
             let segment = ElfSegment {
                 data: segment_data,
                 phys_addr: phent.paddr,

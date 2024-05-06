@@ -977,8 +977,8 @@ fn emulate_kernel_boot(kernel_config: &KernelConfig, kernel_elf: &ElfFile, initi
     let sched_control_cap = fixed_cap_count + paging_cap_count;
 
     // TODO: this is doing a bunch of unecessary copies
-    let device_regions: Vec<MemoryRegion> = [reserved_region.aligned_power_of_two_regions().as_slice(), device_memory.aligned_power_of_two_regions().as_slice()].concat();
-    let normal_regions: Vec<MemoryRegion> = [boot_region.aligned_power_of_two_regions().as_slice(), normal_memory.aligned_power_of_two_regions().as_slice()].concat();
+    let device_regions: Vec<MemoryRegion> = [reserved_region.aligned_power_of_two_regions(), device_memory.aligned_power_of_two_regions()].concat();
+    let normal_regions: Vec<MemoryRegion> = [boot_region.aligned_power_of_two_regions(), normal_memory.aligned_power_of_two_regions()].concat();
     let mut untyped_objects = Vec::new();
     for (i, r) in device_regions.iter().enumerate() {
         let cap = i as u64 + first_untyped_cap;
@@ -1526,8 +1526,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         let name = format!("{}: MR={} @ {:x}", obj_type_name, mr.name, phys_addr);
         let page = init_system.allocate_fixed_objects(phys_addr, obj_type, 1, vec![name]);
         assert!(page.len() == 1);
-        // TODO: is this extend just doing a clone?
-        mr_pages.get_mut(mr).unwrap().extend(page);
+        mr_pages.get_mut(mr).unwrap().push(page[0].clone());
     }
 
     let tcb_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("TCB: PD={}", pd.name)).collect();

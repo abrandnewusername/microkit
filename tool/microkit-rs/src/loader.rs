@@ -183,7 +183,7 @@ impl<'a> Loader<'a> {
         let extra_device_addr_p = reserved_region.base;
         let extra_device_size = reserved_region.size();
 
-        let mut all_regions = Vec::new();
+        let mut all_regions = Vec::with_capacity(regions.len() + system_regions.len());
         for region_set in [regions, system_regions] {
             for r in region_set {
                 all_regions.push(r);
