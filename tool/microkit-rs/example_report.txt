@@ -7,13 +7,13 @@
 
 # Loader Regions
 
-       <Region name=PD-ELF hello-0 addr=0x40244000 size=904>
-       <Region name=PD-ELF hello-1 addr=0x40245000 size=4160>
+       <Region name=PD-ELF hello-0 addr=0x40242000 size=904>
+       <Region name=PD-ELF hello-1 addr=0x40243000 size=4160>
 
 # Monitor (Initial Task) Info
 
      virtual memory : MemoryRegion(base=0x8a000000, end=0x8a007000)
-     physical memory: MemoryRegion(base=0x40247000, end=0x4024e000)
+     physical memory: MemoryRegion(base=0x40245000, end=0x4024c000)
 
 # Allocated Kernel Objects Summary
 
@@ -32,9 +32,9 @@
 # Allocated Kernel Objects Detail
 
     Page(4 KiB): IPC Buffer PD=hello                   9 cap_addr=8000000000000002 phys_addr=40002000
-    Page(4 KiB): MR=ELF:hello-0 @ 40244000             9 cap_addr=8000000000000003 phys_addr=40244000
-    Page(4 KiB): MR=ELF:hello-1 @ 40245000             9 cap_addr=8000000000000004 phys_addr=40245000
-    Page(4 KiB): MR=ELF:hello-1 @ 40246000             9 cap_addr=8000000000000005 phys_addr=40246000
+    Page(4 KiB): MR=ELF:hello-0 @ 40242000             9 cap_addr=8000000000000003 phys_addr=40242000
+    Page(4 KiB): MR=ELF:hello-1 @ 40243000             9 cap_addr=8000000000000004 phys_addr=40243000
+    Page(4 KiB): MR=ELF:hello-1 @ 40244000             9 cap_addr=8000000000000005 phys_addr=40244000
     TCB: PD=hello                                      1 cap_addr=8000000000000006 phys_addr=40003000
     SchedContext: PD=hello                             5 cap_addr=8000000000000007 phys_addr=40004000
     Reply: Monitor                                     6 cap_addr=8000000000000008 phys_addr=40006000
@@ -87,7 +87,7 @@
          src_depth            64
          rights               15
          badge                58
-    0x0005 Untyped              - Retype            - 0x000000000000001b (Untyped @ 0x40243000:0x1000 (device))
+    0x0005 Untyped              - Retype            - 0x000000000000001b (Untyped @ 0x40241000:0x1000 (device))
          object_type          9 (SEL4_SMALL_PAGE_OBJECT - 0x1000)
          size_bits            0 (N/A)
          root (cap)           0x000000000000005c (CNode: root)
@@ -123,7 +123,7 @@
          node_depth           1
          node_offset          2
          num_objects          1
-    0x0001 Untyped              - Retype            - 0x000000000000001c (Untyped @ 0x40244000:0x2000 (device))
+    0x0001 Untyped              - Retype            - 0x000000000000001c (Untyped @ 0x40242000:0x2000 (device))
          object_type          9 (SEL4_SMALL_PAGE_OBJECT - 0x1000)
          size_bits            0 (N/A)
          root (cap)           0x000000000000005c (CNode: root)
@@ -131,7 +131,7 @@
          node_depth           1
          node_offset          3
          num_objects          1
-    0x0002 Untyped              - Retype            - 0x000000000000001c (Untyped @ 0x40244000:0x2000 (device))
+    0x0002 Untyped              - Retype            - 0x000000000000001c (Untyped @ 0x40242000:0x2000 (device))
          object_type          9 (SEL4_SMALL_PAGE_OBJECT - 0x1000)
          size_bits            0 (N/A)
          root (cap)           0x000000000000005c (CNode: root)
@@ -139,7 +139,7 @@
          node_depth           1
          node_offset          4
          num_objects          1
-    0x0003 Untyped              - Retype            - 0x000000000000001d (Untyped @ 0x40246000:0x1000 (device))
+    0x0003 Untyped              - Retype            - 0x000000000000001d (Untyped @ 0x40244000:0x1000 (device))
          object_type          9 (SEL4_SMALL_PAGE_OBJECT - 0x1000)
          size_bits            0 (N/A)
          root (cap)           0x000000000000005c (CNode: root)
@@ -233,7 +233,7 @@
          dest_index           17
          dest_depth           5
          src_root (cap)       0x000000000000005c (CNode: root)
-         src_obj (cap)        0x8000000000000003 (Page(4 KiB): MR=ELF:hello-0 @ 40244000)
+         src_obj (cap)        0x8000000000000003 (Page(4 KiB): MR=ELF:hello-0 @ 40242000)
          src_depth            64
          rights               2
          badge                0
@@ -241,7 +241,7 @@
          dest_index           18
          dest_depth           5
          src_root (cap)       0x000000000000005c (CNode: root)
-         src_obj (cap)        0x8000000000000004 (Page(4 KiB): MR=ELF:hello-1 @ 40245000)
+         src_obj (cap)        0x8000000000000004 (Page(4 KiB): MR=ELF:hello-1 @ 40243000)
          src_depth            64
          rights               3
          badge                0
@@ -290,12 +290,12 @@
          vspace (cap)         0x800000000000000c (VSpace: PD=hello)
          vaddr                0x200000
          attr                 3
-    0x0018 Page                 - Map               - 0x8000000000000011 (Page(4 KiB): MR=ELF:hello-0 @ 40244000 (derived))
+    0x0018 Page                 - Map               - 0x8000000000000011 (Page(4 KiB): MR=ELF:hello-0 @ 40242000 (derived))
          vspace (cap)         0x800000000000000c (VSpace: PD=hello)
          vaddr                0x200000
          rights               2
          attr                 3
-    0x0019 Page                 - Map               - 0x8000000000000012 (Page(4 KiB): MR=ELF:hello-1 @ 40245000 (derived))
+    0x0019 Page                 - Map               - 0x8000000000000012 (Page(4 KiB): MR=ELF:hello-1 @ 40243000 (derived))
          vspace (cap)         0x800000000000000c (VSpace: PD=hello)
          vaddr                0x201000
          rights               3
