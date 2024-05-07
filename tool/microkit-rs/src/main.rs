@@ -1,8 +1,8 @@
 mod sysxml;
-pub mod util;
 mod elf;
 mod sel4;
 mod loader;
+pub mod util;
 
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
@@ -10,11 +10,11 @@ use std::fmt;
 use std::fs;
 use std::cmp::{max,min};
 use std::path::{Path, PathBuf};
-use sysxml::{parse, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
-use elf::ElfFile;
-use sel4::{Invocation, InvocationArgs, ObjectType, Rights, PageSize, Aarch64Regs};
 use std::io::{Write, BufWriter};
 use std::mem::size_of;
+use elf::ElfFile;
+use sel4::{Invocation, InvocationArgs, ObjectType, Rights, PageSize, Aarch64Regs, KernelConfig, KernelArch};
+use sysxml::{parse, PlatformDescription, SystemDescription, ProtectionDomain, SysMap, SysMapPerms, SysMemoryRegion};
 use loader::Loader;
 use util::{struct_to_bytes, comma_sep_usize, comma_sep_u64};
 
@@ -536,17 +536,6 @@ impl DisjointMemoryRegion {
             panic!("Unable to allocate {} bytes", size);
         }
     }
-}
-
-struct KernelConfig {
-    // TODO: check the types of these
-    word_size: usize,
-    minimum_page_size: u64,
-    paddr_user_device_top: u64,
-    kernel_frame_size: u64,
-    init_cnode_bits: u64,
-    cap_address_bits: u64,
-    fan_out_limit: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -1893,8 +1882,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     }
 
     for cc in &system.channels {
-        let pd_a = cc.pd_a;
-        let pd_b = cc.pd_b;
+        let pd_a = &system.protection_domains[cc.pd_a];
+        let pd_b = &system.protection_domains[cc.pd_b];
         let pd_a_cnode_obj = cnode_objs_by_pd[pd_a];
         let pd_b_cnode_obj = cnode_objs_by_pd[pd_b];
         let pd_a_notification_obj = notification_objs_by_pd[pd_a];
@@ -2192,9 +2181,9 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 fn main() {
     let arg_sdf_path = std::env::args().nth(1).expect("no system description path given");
     let xml: String = fs::read_to_string(arg_sdf_path).unwrap();
-    let system = parse(&xml);
 
     let kernel_config = KernelConfig {
+        arch: KernelArch::Aarch64,
         word_size: 64,
         minimum_page_size: 4096,
         paddr_user_device_top: 1 << 40,
@@ -2203,6 +2192,9 @@ fn main() {
         cap_address_bits: 64,
         fan_out_limit: 256,
     };
+
+    let plat_desc = PlatformDescription::new(&kernel_config);
+    let system = parse(&xml, plat_desc);
 
     let monitor_config = MonitorConfig {
         untyped_info_symbol_name: "untyped_info",

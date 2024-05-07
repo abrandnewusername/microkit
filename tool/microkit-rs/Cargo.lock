@@ -13,6 +13,7 @@ name = "microkit-rs"
 version = "0.1.0"
 dependencies = [
  "quick-xml",
+ "roxmltree",
  "serde",
 ]
 
@@ -42,6 +43,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa76aaf39101c457836aec0ce2316dbdc3ab723cdda1c6bd4e6ad4208acaca7"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb79f6167fd05bc84f9aee9988297a47aedc8105de51d1e5f68fa43215aebf7"
+dependencies = [
+ "xmlparser",
 ]
 
 [[package]]
@@ -80,3 +90,9 @@ name = "unicode-ident"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
+
+[[package]]
+name = "xmlparser"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea75f29e9916cc12af3af844a59d2d2ba1ca33aa956e9a162240dc7124cc72bb"

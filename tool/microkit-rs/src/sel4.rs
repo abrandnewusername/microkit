@@ -2,6 +2,22 @@ use std::io::{Write, BufWriter};
 use std::fs::File;
 use std::collections::HashMap;
 
+pub struct KernelConfig {
+    // TODO: check the types of these
+    pub arch: KernelArch,
+    pub word_size: usize,
+    pub minimum_page_size: u64,
+    pub paddr_user_device_top: u64,
+    pub kernel_frame_size: u64,
+    pub init_cnode_bits: u64,
+    pub cap_address_bits: u64,
+    pub fan_out_limit: u64,
+}
+
+pub enum KernelArch {
+    Aarch64,
+}
+
 #[repr(u64)]
 #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
 #[allow(dead_code)]

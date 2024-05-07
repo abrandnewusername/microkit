@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 quick-xml = { version = "0.31.0", features = ["serialize"] }
+roxmltree = "=0.1.0"
 serde = { version = "1.0.198", features = ["derive"] }
