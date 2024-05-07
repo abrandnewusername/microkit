@@ -235,7 +235,7 @@ impl Channel {
     fn from_xml(xml: &roxmltree::Node, pds: &Vec<ProtectionDomain>) -> Channel {
         check_attributes(xml, &[]);
 
-        let mut ends: Vec<(u64, u64)> = Vec::new();
+        let mut ends: Vec<(usize, u64)> = Vec::new();
         for child in xml.children() {
             if !child.is_element() {
                 continue;
@@ -244,29 +244,35 @@ impl Channel {
             match child.tag_name().name() {
                 "end" => {
                     check_attributes(&child, &["pd", "id"]);
-                    let pd = checked_lookup(&child, "pd");
+                    let end_pd = checked_lookup(&child, "pd");
+                    let end_id = checked_lookup(&child, "id").parse::<u64>().unwrap();
+
+                    // TODO: check that end_pd exists
+
+                    let pd_idx = pds.iter().position(|pd| pd.name == end_pd).unwrap();
+
+                    ends.push((pd_idx, end_id))
                 },
                 _ => panic!("Invalid XML element '{}': {}", "TODO", "TODO")
             }
         }
 
         // TODO: what if ends is empty?
-        let pd_a = 0;
-        let id_a = 0;
-
-        let pd_b = 0;
-        let id_b = 0;
+        let (pd_a, id_a) = ends[0];
+        let (pd_b, id_b) = ends[1];
 
         if id_a > PD_MAX_ID {
-            panic!("id must be < {}", PD_MAX_ID + 1);
+            value_error(xml, format!("id must be < {}", PD_MAX_ID + 1));
         }
         if id_b > PD_MAX_ID {
-            panic!("id must be < {}", PD_MAX_ID + 1);
+            value_error(xml, format!("id must be < {}", PD_MAX_ID + 1));
         }
 
         if ends.len() != 2 {
             panic!("exactly two end elements must be specified")
         }
+
+        println!("{:?}", ends);
 
         Channel {
             pd_a,
@@ -299,6 +305,10 @@ fn checked_lookup<'a>(node: &'a roxmltree::Node, attribute: &'static str) -> &'a
     }
 }
 
+fn value_error(node: &roxmltree::Node, err: String) {
+    panic!("Error: {} on element '{}': {}", err, node.tag_name().name(), "todo")
+}
+
 pub fn parse(xml: &str, plat_desc: PlatformDescription) -> SystemDescription {
     let doc = roxmltree::Document::parse(xml).unwrap();
 
@@ -315,6 +325,7 @@ pub fn parse(xml: &str, plat_desc: PlatformDescription) -> SystemDescription {
             println!("{:?}", child);
             match child.tag_name().name() {
                 "protection_domain" => pds.push(ProtectionDomain::from_xml(&child)),
+                "channel" => channels.push(Channel::from_xml(&child, &pds)),
                 _ => panic!("TODO")
             }
         }

@@ -4,6 +4,11 @@ mod sel4;
 mod loader;
 pub mod util;
 
+// TODO: in general I find the code regarding generating all the MRs
+// quite confusing as there are many vectors and hashmaps just floating around.
+// TODO: in addition, we should have checks to ensure that no one can map in
+// someone elses ELF region or something
+
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 use std::fmt;
@@ -2178,9 +2183,51 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     }
 }
 
+fn print_usage() {
+    println!("usage: microkit TODO")
+}
+
 fn main() {
-    let arg_sdf_path = std::env::args().nth(1).expect("no system description path given");
-    let xml: String = fs::read_to_string(arg_sdf_path).unwrap();
+    let mut output = "loader.img";
+    let mut report = "report.txt";
+    let mut system = None;
+
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    let mut unknown = vec![];
+    while i < args.len() {
+        println!("{}", &args[i]);
+        match args[i].as_str() {
+            "-o" | "--output" => {
+                output = &args[i + 1];
+                i += 1;
+            },
+            "-r" | "--report" => {
+                report = &args[i + 1];
+                i += 1;
+            }
+            _ => {
+                if system.is_none() {
+                    system = Some(&args[i]);
+                } else {
+                    // This call to clone is okay since having unknown
+                    // arguments is rare.
+                    unknown.push(args[i].clone());
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    if unknown.len() > 0 {
+        print_usage();
+        panic!("microkit: error: unrecognised arguments: {}", unknown.join(" "));
+    }
+
+    let output_path = Path::new(output);
+
+    let xml: String = fs::read_to_string(system.unwrap()).unwrap();
 
     let kernel_config = KernelConfig {
         arch: KernelArch::Aarch64,
@@ -2388,5 +2435,5 @@ fn main() {
         built_system.reserved_region,
         loader_regions,
     );
-    loader.write_image(&Path::new("testing/loader.img"))
+    loader.write_image(output_path)
 }
