@@ -8,4 +8,13 @@
     <protection_domain name="hello" priority="254">
         <program_image path="hello.elf" />
     </protection_domain>
+    <protection_domain name="hello-2" priority="254">
+        <program_image path="hello.elf" />
+    </protection_domain>
+
+    <channel>
+        <end pd="hello" id="0" />
+        <end pd="hello-2" id="0" />
+    </channel>
+
 </system>
