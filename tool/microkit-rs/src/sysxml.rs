@@ -122,6 +122,8 @@ pub struct ProtectionDomain {
 
 impl ProtectionDomain {
     fn from_xml(xml: &roxmltree::Node) -> ProtectionDomain {
+        check_attributes(xml, &["name", "priority", "pp", "budget", "period", "passive"]);
+
         let budget = 1000;
         let period = budget;
         let pp = false;
@@ -230,38 +232,71 @@ impl SysMemoryRegion {
 }
 
 impl Channel {
-    // fn from_xml(xml: XmlChannel, pds: &Vec<ProtectionDomain>) -> Channel {
-    //     // TODO: what if ends is empty?
-    //     let pd_a = pds.iter().position(|pd| pd.name == xml.ends[0].pd).unwrap();
-    //     let id_a = xml.ends[0].id.parse::<u64>().unwrap();
+    fn from_xml(xml: &roxmltree::Node, pds: &Vec<ProtectionDomain>) -> Channel {
+        check_attributes(xml, &[]);
 
-    //     let pd_b = pds.iter().position(|pd| pd.name == xml.ends[1].pd).unwrap();
-    //     let id_b = xml.ends[1].id.parse::<u64>().unwrap();
+        let mut ends: Vec<(u64, u64)> = Vec::new();
+        for child in xml.children() {
+            if !child.is_element() {
+                continue;
+            }
 
-    //     if id_a > PD_MAX_ID {
-    //         panic!("id must be < {}", PD_MAX_ID + 1);
-    //     }
-    //     if id_b > PD_MAX_ID {
-    //         panic!("id must be < {}", PD_MAX_ID + 1);
-    //     }
+            match child.tag_name().name() {
+                "end" => {
+                    check_attributes(&child, &["pd", "id"]);
+                    let pd = checked_lookup(&child, "pd");
+                },
+                _ => panic!("Invalid XML element '{}': {}", "TODO", "TODO")
+            }
+        }
 
-    //     if xml.ends.len() != 2 {
-    //         panic!("exactly two end elements must be specified")
-    //     }
+        // TODO: what if ends is empty?
+        let pd_a = 0;
+        let id_a = 0;
 
-    //     Channel {
-    //         pd_a,
-    //         id_a,
-    //         pd_b,
-    //         id_b,
-    //     }
-    // }
+        let pd_b = 0;
+        let id_b = 0;
+
+        if id_a > PD_MAX_ID {
+            panic!("id must be < {}", PD_MAX_ID + 1);
+        }
+        if id_b > PD_MAX_ID {
+            panic!("id must be < {}", PD_MAX_ID + 1);
+        }
+
+        if ends.len() != 2 {
+            panic!("exactly two end elements must be specified")
+        }
+
+        Channel {
+            pd_a,
+            id_a,
+            pd_b,
+            id_b,
+        }
+    }
 }
 
 pub struct SystemDescription {
     pub protection_domains: Vec<ProtectionDomain>,
     pub memory_regions: Vec<SysMemoryRegion>,
     pub channels: Vec<Channel>,
+}
+
+fn check_attributes(node: &roxmltree::Node, attributes: &[&'static str]) {
+    for attribute in node.attributes() {
+        if !attributes.contains(&attribute.name()) {
+            panic!("invalid attribute '{}'", attribute.name());
+        }
+    }
+}
+
+fn checked_lookup<'a>(node: &'a roxmltree::Node, attribute: &'static str) -> &'a str {
+    if let Some(value) = node.attribute(attribute) {
+        value
+    } else {
+        panic!("Missing attribute: {}", "TODO");
+    }
 }
 
 pub fn parse(xml: &str, plat_desc: PlatformDescription) -> SystemDescription {
