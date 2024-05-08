@@ -8,6 +8,14 @@ pub fn lsb(x: u64) -> u64 {
     x.trailing_zeros() as u64
 }
 
+pub fn str_to_bool(s: &str) -> Result<bool, &'static str> {
+    match s {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("invalid boolean value")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.

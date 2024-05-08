@@ -408,12 +408,14 @@ impl Invocation {
     /// at runtime.
     /// Appends to the given data
     pub fn add_raw_invocation(&self, data: &mut Vec<u8>) {
+        // TODO: the ordering of the extends in this function is important
+        // and a bit confusing. Must be revisited and commented.
         let (service, args, extra_caps): (u64, Vec<u64>, Vec<u64>) = self.args.get_args();
 
         // TODO: use into() instead?
         let label_num = self.label as u64;
         let mut tag = Invocation::message_info_new(label_num, 0, extra_caps.len() as u64, args.len() as u64);
-        if let Some((count, repeat)) = self.repeat {
+        if let Some((count, _)) = self.repeat {
             // TODO: can we somehow check that the variant of repeat InvocationArgs is the same as the invocation?
             tag |= (count - 1) << 32;
         }
@@ -429,7 +431,7 @@ impl Invocation {
             data.extend(arg.to_le_bytes());
         }
 
-        if let Some((count, repeat)) = self.repeat {
+        if let Some((_, repeat)) = self.repeat {
             let (repeat_service, repeat_args, repeat_extra_caps) = repeat.get_args();
             data.extend(repeat_service.to_le_bytes());
             for cap in repeat_extra_caps {

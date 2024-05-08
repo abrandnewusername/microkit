@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use crate::util::{str_to_bool};
 use crate::sel4::{PageSize, ArmIrqTrigger, KernelConfig, KernelArch};
 
 ///
@@ -94,7 +95,9 @@ pub struct SysIrq {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysSetVar {
     pub symbol: String,
-    pub region_paddr: Option<String>,
+    pub region_paddr: String,
+    // TODO: this is never parsed in the Python tool,
+    // not sure what to do
     pub vaddr: Option<u64>,
 }
 
@@ -120,17 +123,36 @@ pub struct ProtectionDomain {
     pub setvars: Vec<SysSetVar>,
 }
 
+impl SysMapPerms {
+    fn from_str(s: &str) -> Result<u8, &'static str> {
+        let mut perms = 0;
+        for c in s.chars() {
+            match c {
+                'r' => perms |= SysMapPerms::Read as u8,
+                'w' => perms |= SysMapPerms::Write as u8,
+                'x' => perms |= SysMapPerms::Execute as u8,
+                _ => return Err("invalid permissions")
+            }
+        }
+
+        Ok(perms)
+    }
+}
+
 impl ProtectionDomain {
-    fn from_xml(xml: &roxmltree::Node) -> ProtectionDomain {
+    fn from_xml(xml: &roxmltree::Node) -> Result<ProtectionDomain, &'static str> {
         check_attributes(xml, &["name", "priority", "pp", "budget", "period", "passive"]);
 
+        // Default to 1000 microseconds as the budget, with the period defaulting
+        // to being the same as the budget as well.
         let budget = 1000;
         let period = budget;
         let pp = false;
         let passive = false;
-        let maps = vec![];
-        let irqs = vec![];
-        let setvars = vec![];
+
+        let mut maps = Vec::new();
+        let mut irqs = Vec::new();
+        let mut setvars = Vec::new();
 
         let mut program_image = None;
 
@@ -155,12 +177,80 @@ impl ProtectionDomain {
                     let program_image_path = child.attribute("path").unwrap();
                     program_image = Some(Path::new(program_image_path).to_path_buf());
                 },
+                "map" => {
+                    check_attributes(&child, &["mr", "vaddr", "perms", "cached", "setvar_vaddr"]);
+                    let mr = checked_lookup(&child, "mr").to_string();
+                    let vaddr = checked_lookup(&child, "vaddr").parse::<u64>().unwrap();
+                    let perms = if let Some(xml_perms) = child.attribute("perms") {
+                        // TODO: use like a into or from here?
+                        SysMapPerms::from_str(xml_perms)?
+                    } else {
+                        // Default to read-write
+                        SysMapPerms::Read as u8 | SysMapPerms::Write as u8
+                    };
+
+                    // On all architectures, the kernel does not allow write-only mappings
+                    if perms == SysMapPerms::Write as u8 {
+                        panic!("perms mut not be 'w', write-only mappings are not allowed")
+                    }
+
+                    let cached = if let Some(xml_cached) = child.attribute("cached") {
+                        str_to_bool(xml_cached)?
+                    } else {
+                        // Default to cached
+                        true
+                    };
+
+                    // TODO: store the index into the memory regions instead?
+                    maps.push(SysMap {
+                        mr,
+                        vaddr,
+                        perms,
+                        cached
+                    });
+                }
+                "irq" => {
+                    check_attributes(&child, &["irq", "id", "trigger"]);
+                    let irq = checked_lookup(&child, "irq").parse::<u64>().unwrap();
+                    let id = checked_lookup(&child, "id").parse::<u64>().unwrap();
+                    if id > PD_MAX_ID {
+                        panic!("id mut be < {}", PD_MAX_ID + 1);
+                    }
+
+                    let trigger = if let Some(trigger_str) = child.attribute("trigger") {
+                        match trigger_str {
+                            "level" => ArmIrqTrigger::Level,
+                            "edge" => ArmIrqTrigger::Edge,
+                            _ => panic!("trigger must be either 'level' or 'edge'")
+                        }
+                    } else {
+                        // Default the level triggered
+                        ArmIrqTrigger::Level
+                    };
+
+                    let irq = SysIrq {
+                        irq,
+                        id,
+                        trigger
+                    };
+                    irqs.push(irq);
+                },
+                "setvar" => {
+                    check_attributes(&child, &["symbol", "region_paddr"]);
+                    let symbol = checked_lookup(&child, "symbol").to_string();
+                    let region_paddr = checked_lookup(&child, "region_paddr").to_string();
+                    setvars.push(SysSetVar {
+                        symbol,
+                        region_paddr,
+                        vaddr: None,
+                    })
+                }
                 _ => println!("TODO, {:?}", child)
             }
         }
 
         // TODO: fix this!
-        ProtectionDomain {
+        Ok(ProtectionDomain {
             name: xml.attribute("name").unwrap().to_string(),
             priority,
             budget,
@@ -171,64 +261,55 @@ impl ProtectionDomain {
             maps,
             irqs,
             setvars,
-        }
+        })
     }
 }
 
-impl SysIrq {
-    // fn from_xml(xml: XmlSysIrq) -> SysIrq {
-    //     // TODO: remove ARM specific trigger and use general thing
-    //     let trigger;
-    //     if let Some(xml_trigger) = xml.trigger {
-    //         trigger = match xml_trigger.as_str() {
-    //             "level" => ArmIrqTrigger::Level,
-    //             "edge" => ArmIrqTrigger::Edge,
-    //             _ => panic!("trigger must be either 'level' or 'edge'")
-    //         }
-    //     } else {
-    //         // Default to level triggered
-    //         trigger = ArmIrqTrigger::Level;
-    //     }
-
-    //     // TODO: need to actually handle error in case it's not a u64
-    //     let irq = xml.irq.parse::<u64>().unwrap();
-    //     let id = xml.id.parse::<u64>().unwrap();
-
-    //     SysIrq {
-    //         irq,
-    //         id,
-    //         trigger,
-    //     }
-    // }
-}
-
 impl SysMemoryRegion {
-    // fn from_xml(xml: XmlMemoryRegion, plat_desc: &PlatformDescription) -> SysMemoryRegion {
-    //     let page_size = if let Some(xml_page_size) = xml.page_size {
-    //         xml_page_size.parse::<u64>().unwrap()
-    //     } else {
-    //         plat_desc.page_sizes[0]
-    //     };
+    fn from_xml(xml: &roxmltree::Node, plat_desc: &PlatformDescription) -> SysMemoryRegion {
+        check_attributes(xml, &["name", "size", "page_size", "phys_addr"]);
 
-    //     // TODO: check valid
-    //     let page_size_valid = plat_desc.page_sizes.contains(&page_size);
+        let name = checked_lookup(xml, "name");
+        // TODO: don't unwrap
+        let size = checked_lookup(xml, "size").parse::<u64>().unwrap();
 
-    //     let phys_addr = if let Some(xml_phys_addr) = xml.phys_addr {
-    //         Some(xml_phys_addr.parse::<u64>().unwrap())
-    //     } else {
-    //         None
-    //     };
+        let page_size = if let Some(xml_page_size) = xml.attribute("page_size") {
+            xml_page_size.parse::<u64>().unwrap()
+        } else {
+            // Default to the minimum page size
+            plat_desc.page_sizes[0]
+        };
 
-    //     let page_count = 0; // TODO
+        // TODO: check valid
+        let page_size_valid = plat_desc.page_sizes.contains(&page_size);
+        if !page_size_valid {
+            panic!("page size 0x{:x} not supported", page_size);
+        }
 
-    //     SysMemoryRegion {
-    //         name: xml.name,
-    //         size: xml.size.parse::<u64>().unwrap(),
-    //         page_size: page_size.into(),
-    //         page_count,
-    //         phys_addr,
-    //     }
-    // }
+        if size % page_size != 0 {
+            panic!("size is not a multiple of the page size");
+        }
+
+        let phys_addr = if let Some(xml_phys_addr) = xml.attribute("phys_addr") {
+            Some(xml_phys_addr.parse::<u64>().unwrap())
+        } else {
+            None
+        };
+
+        if !phys_addr.is_none() && phys_addr.unwrap() % page_size != 0 {
+            panic!("phys_addr is not aligned to the page size");
+        }
+
+        let page_count = size / page_size;
+
+        SysMemoryRegion {
+            name: name.to_string(),
+            size,
+            page_size: page_size.into(),
+            page_count,
+            phys_addr,
+        }
+    }
 }
 
 impl Channel {
@@ -272,8 +353,6 @@ impl Channel {
             panic!("exactly two end elements must be specified")
         }
 
-        println!("{:?}", ends);
-
         Channel {
             pd_a,
             id_a,
@@ -309,7 +388,7 @@ fn value_error(node: &roxmltree::Node, err: String) {
     panic!("Error: {} on element '{}': {}", err, node.tag_name().name(), "todo")
 }
 
-pub fn parse(xml: &str, plat_desc: PlatformDescription) -> SystemDescription {
+pub fn parse(xml: &str, plat_desc: PlatformDescription) -> Result<SystemDescription, &'static str> {
     let doc = roxmltree::Document::parse(xml).unwrap();
 
     let mut pds = vec![];
@@ -322,18 +401,20 @@ pub fn parse(xml: &str, plat_desc: PlatformDescription) -> SystemDescription {
                 continue;
             }
 
-            println!("{:?}", child);
             match child.tag_name().name() {
-                "protection_domain" => pds.push(ProtectionDomain::from_xml(&child)),
+                "protection_domain" => pds.push(ProtectionDomain::from_xml(&child)?),
+                // TODO: this is wrong as this assumes that all the protection domains have been
+                // parsed at this point which is not true.
                 "channel" => channels.push(Channel::from_xml(&child, &pds)),
+                "memory_region" => mrs.push(SysMemoryRegion::from_xml(&child, &plat_desc)),
                 _ => panic!("TODO")
             }
         }
     }
 
-    SystemDescription {
+    Ok(SystemDescription {
         protection_domains: pds,
         memory_regions: mrs,
         channels,
-    }
+    })
 }

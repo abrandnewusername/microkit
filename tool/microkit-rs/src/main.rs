@@ -2144,20 +2144,17 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 
     for pd in &system.protection_domains {
         for setvar in &pd.setvars {
-            let value;
-            if let Some(region_paddr) = &setvar.region_paddr {
-                let mr = system.memory_regions.iter()
-                                              .find(|mr| mr.name == *region_paddr)
-                                              .expect(format!("Cannot find region: {}", region_paddr).as_str());
-                value = mr_pages[mr][0].phys_addr;
-            } else if let Some(vaddr) = setvar.vaddr {
-                value = vaddr;
+            let mr = system.memory_regions.iter()
+                                          .find(|mr| mr.name == setvar.region_paddr)
+                                          .expect(format!("Cannot find region: {}", setvar.region_paddr).as_str());
+            let value = mr_pages[mr][0].phys_addr;
+
+            // We assume that all the architectures we are dealing with are little-endian
+            if let Some(elf) = pd_elf_files.get_mut(pd) {
+                elf.write_symbol(&setvar.symbol, &value.to_le_bytes());
             } else {
                 panic!("Unable to patch variable '{}' in protection domain '{}': variable not found.", setvar.symbol, pd.name);
             }
-
-            // We assume that all the architectures we are dealing with are little-endian
-            pd_elf_files.get_mut(pd).unwrap().write_symbol(&setvar.symbol, &value.to_le_bytes());
         }
     }
 
@@ -2188,27 +2185,26 @@ fn print_usage() {
 }
 
 fn main() {
-    let mut output = "loader.img";
-    let mut report = "report.txt";
-    let mut system = None;
+    let mut arg_output = "loader.img";
+    let mut arg_report = "report.txt";
+    let mut arg_system = None;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     let mut unknown = vec![];
     while i < args.len() {
-        println!("{}", &args[i]);
         match args[i].as_str() {
             "-o" | "--output" => {
-                output = &args[i + 1];
+                arg_output = &args[i + 1];
                 i += 1;
             },
             "-r" | "--report" => {
-                report = &args[i + 1];
+                arg_report = &args[i + 1];
                 i += 1;
             }
             _ => {
-                if system.is_none() {
-                    system = Some(&args[i]);
+                if arg_system.is_none() {
+                    arg_system = Some(&args[i]);
                 } else {
                     // This call to clone is okay since having unknown
                     // arguments is rare.
@@ -2225,9 +2221,12 @@ fn main() {
         panic!("microkit: error: unrecognised arguments: {}", unknown.join(" "));
     }
 
-    let output_path = Path::new(output);
+    let output_path = Path::new(arg_output);
 
-    let xml: String = fs::read_to_string(system.unwrap()).unwrap();
+    // If we are missing the system argument that should have been caught by
+    // above
+    assert!(arg_system.is_some());
+    let xml: String = fs::read_to_string(arg_system.unwrap()).unwrap();
 
     let kernel_config = KernelConfig {
         arch: KernelArch::Aarch64,
@@ -2241,7 +2240,7 @@ fn main() {
     };
 
     let plat_desc = PlatformDescription::new(&kernel_config);
-    let system = parse(&xml, plat_desc);
+    let system = parse(&xml, plat_desc).expect("TODO");
 
     let monitor_config = MonitorConfig {
         untyped_info_symbol_name: "untyped_info",
@@ -2369,10 +2368,9 @@ fn main() {
     }
 
     // Generate the report
-    let report_path = "report.txt";
-    let report = match std::fs::File::create(report_path) {
+    let report = match std::fs::File::create(arg_report) {
         Ok(file) => file,
-        Err(e) => panic!("Could not create report file '{}': {}", report_path, e),
+        Err(e) => panic!("Could not create report file '{}': {}", arg_report, e),
     };
 
     let mut report_buf = BufWriter::new(report);
