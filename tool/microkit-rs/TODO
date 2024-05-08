@@ -5,3 +5,4 @@
 * Figure out why the loader.img binary is not the same as the Python tool
 * test for invalid permissions (e.g "rwxg")
 * Parsing hex numbers in XML does not work
+* Change README for new tool
