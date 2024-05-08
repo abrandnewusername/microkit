@@ -1,0 +1,7 @@
+* Remove all panics and use proper OS exit
+* Remove all TODOs
+* Finish XML parsing
+* Finish report formatting
+* Figure out why the loader.img binary is not the same as the Python tool
+* test for invalid permissions (e.g "rwxg")
+
