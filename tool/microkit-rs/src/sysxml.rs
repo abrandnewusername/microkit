@@ -208,6 +208,14 @@ impl ProtectionDomain {
                         perms,
                         cached
                     });
+
+                    if let Some(setvar_vaddr) = child.attribute("setvar_vaddr") {
+                        setvars.push(SysSetVar {
+                            symbol: setvar_vaddr.to_string(),
+                            region_paddr: None,
+                            vaddr: Some(vaddr),
+                        });
+                    }
                 }
                 "irq" => {
                     check_attributes(&child, &["irq", "id", "trigger"]);

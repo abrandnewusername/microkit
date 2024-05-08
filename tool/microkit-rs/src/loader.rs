@@ -259,11 +259,11 @@ impl<'a> Loader<'a> {
     // TODO: this function is complicated and takes me a while to understand
     // everytime I read it so it must be commented sufficiently
     fn setup_pagetables(elf: &ElfFile, first_vaddr: u64, first_paddr: u64) -> [(u64, u64, [u8; PAGE_TABLE_SIZE]); 5] {
-        let (boot_lvl1_lower_addr, boot_lvl1_lower_size) = elf.find_symbol("boot_lvl1_lower");
-        let (boot_lvl1_upper_addr, boot_lvl1_upper_size) = elf.find_symbol("boot_lvl1_upper");
-        let (boot_lvl2_upper_addr, boot_lvl2_upper_size) = elf.find_symbol("boot_lvl2_upper");
-        let (boot_lvl0_lower_addr, boot_lvl0_lower_size) = elf.find_symbol("boot_lvl0_lower");
-        let (boot_lvl0_upper_addr, boot_lvl0_upper_size) = elf.find_symbol("boot_lvl0_upper");
+        let (boot_lvl1_lower_addr, boot_lvl1_lower_size) = elf.find_symbol("boot_lvl1_lower").expect("Could not find 'boot_lvl1_lower' symbol");
+        let (boot_lvl1_upper_addr, boot_lvl1_upper_size) = elf.find_symbol("boot_lvl1_upper").expect("Could not find 'boot_lvl1_upper' symbol");
+        let (boot_lvl2_upper_addr, boot_lvl2_upper_size) = elf.find_symbol("boot_lvl2_upper").expect("Could not find 'boot_lvl2_upper' symbol");
+        let (boot_lvl0_lower_addr, boot_lvl0_lower_size) = elf.find_symbol("boot_lvl0_lower").expect("Could not find 'boot_lvl0_lower' symbol");
+        let (boot_lvl0_upper_addr, boot_lvl0_upper_size) = elf.find_symbol("boot_lvl0_upper").expect("Could not find 'boot_lvl0_upper' symbol");
 
         let mut boot_lvl0_lower: [u8; PAGE_TABLE_SIZE] = [0; PAGE_TABLE_SIZE];
         boot_lvl0_lower[..8].copy_from_slice(&(boot_lvl1_lower_addr | 3).to_le_bytes());

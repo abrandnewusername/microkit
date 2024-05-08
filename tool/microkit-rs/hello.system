@@ -6,11 +6,11 @@
 -->
 <system>
     <protection_domain name="hello" priority="254">
-        <map mr="test" vaddr="16777216" setvar_vaddr="test_mr" perms="rw" />
+        <map mr="test" vaddr="16777216" perms="rw" />
         <program_image path="hello.elf" />
     </protection_domain>
     <protection_domain name="hello-2" priority="254">
-        <map mr="test" vaddr="16777216" setvar_vaddr="test_mr" perms="rw" />
+        <map mr="test" vaddr="16777216" perms="rw" />
         <program_image path="hello.elf" />
     </protection_domain>
 

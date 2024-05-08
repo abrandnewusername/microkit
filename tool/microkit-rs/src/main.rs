@@ -9,6 +9,7 @@ pub mod util;
 // TODO: in addition, we should have checks to ensure that no one can map in
 // someone elses ELF region or something
 
+use std::process::exit;
 use std::collections::{HashMap, HashSet};
 use std::iter::zip;
 use std::fmt;
@@ -196,12 +197,17 @@ impl<'a> InitSystem<'a> {
     }
 
     pub fn reserve(&mut self, allocations: Vec<(&UntypedObject, u64)>) {
+        println!("length of allocations: {}", allocations.len());
         for (alloc_ut, alloc_phys_addr) in allocations {
+            println!("alloc_phys_addr: 0x{:x}", alloc_phys_addr);
+            let mut found = false;
             for fut in &mut self.device_untyped {
                 if *alloc_ut == fut.ut {
+                    println!("match: watermark: 0x{:x}, alloc_phys_addr: 0x{:x}", fut.watermark, alloc_phys_addr);
                     if fut.ut.base() <= alloc_phys_addr && alloc_phys_addr <= fut.ut.end() {
                         fut.watermark = alloc_phys_addr;
-                        return;
+                        found = true;
+                        break;
                     } else {
                         // TODO: use display trait instead
                         panic!("Allocation {:?} ({:x}) not in untyped region {:?}", alloc_ut, alloc_phys_addr, fut.ut.region);
@@ -210,7 +216,9 @@ impl<'a> InitSystem<'a> {
             }
 
             // TODO: use display trait instead
-            panic!("Allocation {:?} ({:x}) not in any device untyped", alloc_ut, alloc_phys_addr);
+            if !found {
+                panic!("Allocation {:?} ({:x}) not in any device untyped", alloc_ut, alloc_phys_addr);
+            }
         }
     }
 
@@ -223,6 +231,7 @@ impl<'a> InitSystem<'a> {
 
         let alloc_size = object_type.fixed_size().unwrap();
         // Find an untyped that contains the given address
+        // TODO: remove this expect
         let fut: &mut FixedUntypedAlloc = self.device_untyped
                     .iter_mut()
                     .find(|fut| fut.contains(phys_address))
@@ -231,6 +240,9 @@ impl<'a> InitSystem<'a> {
         if phys_address < fut.watermark {
             panic!("physical address {:x} is below watermark", phys_address);
         }
+
+        println!("1. phys_addr: 0x{:x} {:?}", phys_address, self.cap_slot);
+        println!("fut: {:?}", fut);
 
         if fut.watermark != phys_address {
             // If the watermark isn't at the right spot, then we need to
@@ -271,6 +283,8 @@ impl<'a> InitSystem<'a> {
                 self.cap_slot += 1;
             }
         }
+
+        println!("2. {:?}", self.cap_slot);
 
         let object_cap = self.cap_slot;
         self.cap_slot += 1;
@@ -326,6 +340,7 @@ impl<'a> InitSystem<'a> {
             panic!("Invalid object type: {:?}", object_type);
         }
 
+        println!("alloc: cap_slot: {}", self.cap_slot);
         let allocation = self.kao.alloc_n(alloc_size, count);
         let base_cap_slot = self.cap_slot;
         self.cap_slot += count;
@@ -732,7 +747,8 @@ fn kernel_device_addrs(kernel_config: &KernelConfig, kernel_elf: &ElfFile) -> Ve
     assert!(kernel_config.word_size == 64, "Unsupported word-size");
 
     let mut kernel_devices = Vec::new();
-    let (vaddr, size) = kernel_elf.find_symbol("kernel_device_frames");
+    let (vaddr, size) = kernel_elf.find_symbol("kernel_device_frames")
+                                  .expect("Could not find 'kernel_device_frames' symbol");
     // TODO: don't unwrap
     let kernel_frame_bytes = kernel_elf.get_data(vaddr, size).unwrap();
     let kernel_frame_size = size_of::<KernelFrame64>();
@@ -760,7 +776,8 @@ struct KernelRegion64 {
 fn kernel_phys_mem(kernel_config: &KernelConfig, kernel_elf: &ElfFile) -> Vec<(u64, u64)> {
     assert!(kernel_config.word_size == 64, "Unsupported word-size");
     let mut phys_mem = Vec::new();
-    let (vaddr, size) = kernel_elf.find_symbol("avail_p_regs");
+    let (vaddr, size) = kernel_elf.find_symbol("avail_p_regs")
+                                  .expect("Could not find 'avail_p_regs' symbol");
         // TODO: don't unwrap
     let p_region_bytes = kernel_elf.get_data(vaddr, size).unwrap();
     let p_region_size = size_of::<KernelRegion64>();
@@ -779,7 +796,8 @@ fn kernel_phys_mem(kernel_config: &KernelConfig, kernel_elf: &ElfFile) -> Vec<(u
 fn kernel_self_mem(kernel_elf: &ElfFile) -> MemoryRegion {
     // TODO: check this function
     let base = kernel_elf.segments[0].phys_addr;
-    let (ki_end_v, _) = kernel_elf.find_symbol("ki_end");
+    let (ki_end_v, _) = kernel_elf.find_symbol("ki_end")
+                                  .expect("Could not find 'ki_end' symbol");
     let ki_end_p = ki_end_v - kernel_elf.segments[0].virt_addr + base;
 
     MemoryRegion::new(base, ki_end_p)
@@ -788,7 +806,8 @@ fn kernel_self_mem(kernel_elf: &ElfFile) -> MemoryRegion {
 fn kernel_boot_mem(kernel_elf: &ElfFile) -> MemoryRegion {
     // TODO: check this function
     let base = kernel_elf.segments[0].phys_addr;
-    let (ki_boot_end_v, _) = kernel_elf.find_symbol("ki_boot_end");
+    let (ki_boot_end_v, _) = kernel_elf.find_symbol("ki_boot_end")
+                                       .expect("Could not find 'ki_boot_end' symbol");
     let ki_boot_end_p = ki_boot_end_v - kernel_elf.segments[0].virt_addr + base;
 
     MemoryRegion::new(base, ki_boot_end_p)
@@ -1263,6 +1282,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         remaining_pages -= retype_page_count;
         cap_slot += retype_page_count;
         phys_addr += retype_page_count * kernel_config.minimum_page_size;
+        println!("adding phys_addr: 0x{:x}", phys_addr);
         invocation_table_allocations.push((ut, phys_addr));
         if remaining_pages == 0 {
             break;
@@ -1355,6 +1375,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     let mut extra_mrs = Vec::new();
     let mut pd_extra_maps: HashMap<&ProtectionDomain, Vec<SysMap>> = HashMap::new();
     for pd in &system.protection_domains {
+        println!("{:?}", pd);
         pd_elf_regions.insert(pd, Vec::with_capacity(pd_elf_files[pd].segments.len()));
         for (seg_idx, segment) in pd_elf_files[pd].segments.iter().enumerate() {
             if !segment.loadable {
@@ -1432,6 +1453,9 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         &mut cap_address_names
     );
 
+    for a in &invocation_table_allocations {
+        println!("inv {:?}", a);
+    }
     init_system.reserve(invocation_table_allocations);
 
     // 3.1 Work out how many regular (non-fixed) page objects are required
@@ -1464,6 +1488,10 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 
     let large_page_objs = init_system.allocate_objects(ObjectType::LargePage, large_page_names, None);
     let small_page_objs = init_system.allocate_objects(ObjectType::SmallPage, small_page_names, None);
+
+    println!("cap_slot: 0x{:x}", init_system.cap_slot);
+
+    println!("small_page_objs: {}", small_page_objs.len());
 
     // All the IPC buffers are the first to be allocated which is why this works
     let ipc_buffer_objs = &small_page_objs[..system.protection_domains.len()];
@@ -1509,6 +1537,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 
     // FIXME: At this point we can recombine them into
     // groups to optimize allocation
+    println!("init_system.cap_slot: {}", init_system.cap_slot);
 
     for (phys_addr, mr) in fixed_pages {
         let obj_type = match mr.page_size {
@@ -1522,6 +1551,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         assert!(page.len() == 1);
         mr_pages.get_mut(mr).unwrap().push(page[0].clone());
     }
+
+    println!("init_system.cap_slot: {}", init_system.cap_slot);
 
     let tcb_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("TCB: PD={}", pd.name)).collect();
     let tcb_objs = init_system.allocate_objects(ObjectType::Tcb, tcb_names, None);
@@ -1576,7 +1607,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     let mut ds: Vec<(usize, u64)> = Vec::new();
     let mut pts: Vec<(usize, u64)> = Vec::new();
     for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
-        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER);
+        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER)
+                                                    .expect(format!("Could not find {}", SYMBOL_IPC_BUFFER).as_str());
         let mut upper_directory_vaddrs = HashSet::new();
         let mut directory_vaddrs = HashSet::new();
         let mut page_table_vaddrs = HashSet::new();
@@ -1627,9 +1659,9 @@ fn build_system<'a>(kernel_config: &KernelConfig,
     let pt_names = pts.iter().map(|(pd_idx, vaddr)| format!("PageTable: PD={} VADDR=0x{:x}", pd_names[*pd_idx], vaddr)).collect();
     let pt_objs = init_system.allocate_objects(ObjectType::PageTable, pt_names, None);
 
-    uds.sort_by_key(|ud| ud.1);
-    ds.sort_by_key(|d| d.1);
-    pts.sort_by_key(|pt| pt.1);
+    uds.sort_by_key(|ud| ud.0);
+    ds.sort_by_key(|d| d.0);
+    pts.sort_by_key(|pt| pt.0);
 
     // Create CNodes - all CNode objects are the same size: 128 slots.
     let cnode_names: Vec<String> = system.protection_domains.iter().map(|pd| format!("CNode: PD={}", pd.name)).collect();
@@ -2025,7 +2057,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 
     // And, finally, map all the IPC buffers
     for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
-        let (vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER);
+        let (vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER)
+                                         .expect(format!("Could not find {}", SYMBOL_IPC_BUFFER).as_str());
         system_invocations.push(Invocation::new(InvocationArgs::PageMap {
             page: ipc_buffer_objs[pd_idx].cap_addr,
             vspace: vspace_objs[pd_idx].cap_addr,
@@ -2082,7 +2115,8 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 
     // Set IPC buffer
     for (pd_idx, pd) in system.protection_domains.iter().enumerate() {
-        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER);
+        let (ipc_buffer_vaddr, _) = pd_elf_files[pd].find_symbol(SYMBOL_IPC_BUFFER)
+                                                    .expect(format!("Could not find {}", SYMBOL_IPC_BUFFER).as_str());
         system_invocations.push(Invocation::new(InvocationArgs::TcbSetIpcBuffer {
             tcb: tcb_objs[pd_idx].cap_addr,
             buffer: ipc_buffer_vaddr,
@@ -2160,11 +2194,16 @@ fn build_system<'a>(kernel_config: &KernelConfig,
                 panic!("INTERNAL ERROR");
             }
 
+            let symbol_res = pd_elf_files.get_mut(pd).unwrap().write_symbol(&setvar.symbol, &value.to_le_bytes());
+            if let Err(err) = symbol_res {
+                eprintln!("Unable to patch variable '{}' in protection domain '{}': {}.", setvar.symbol, pd.name, err);
+                exit(1);
+            }
+
             if let Some(elf) = pd_elf_files.get_mut(pd) {
                // We assume that all the architectures we are dealing with are little-endian
                 elf.write_symbol(&setvar.symbol, &value.to_le_bytes())?;
             } else {
-                panic!("Unable to patch variable '{}' in protection domain '{}': variable not found.", setvar.symbol, pd.name);
             }
         }
     }
@@ -2318,7 +2357,8 @@ fn main() {
     // we could have a bug, or the kernel could change. It that happens we are
     // in a bad spot! Things will break. So we write out this information so that
     // the monitor can double check this at run time.
-    let (_, untyped_info_size) = monitor_elf.find_symbol(monitor_config.untyped_info_symbol_name);
+    let (_, untyped_info_size) = monitor_elf.find_symbol(monitor_config.untyped_info_symbol_name)
+                                            .expect(format!("Could not find '{}' symbol", monitor_config.untyped_info_symbol_name).as_str());
     let max_untyped_objects = monitor_config.max_untyped_objects(untyped_info_size);
     if built_system.kernel_boot_info.untyped_objects.len() as u64 > max_untyped_objects {
         // TODO: comma separator missing in panic

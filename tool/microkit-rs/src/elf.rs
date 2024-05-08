@@ -248,17 +248,18 @@ impl ElfFile {
             let sym = sym_body[0];
             let name = Self::get_string(symtab_str, sym.name as usize);
             // TODO: could potentially get rid of this allocation....
-            let insert = symbols.insert(name.to_string(), sym);
-            if insert.is_some() {
-                panic!("Multiple symbols with name '{}'", name);
-            }
+            symbols.insert(name.to_string(), sym);
+            // TODO: fix multiple symbol check
+            // if insert.is_some() && name.len() > 0 {
+                // panic!("Multiple symbols with name '{}'", name);
+            // }
             offset += symbol_size;
         }
 
         ElfFile { word_size, entry, segments, symbols }
     }
 
-    pub fn find_symbol(&self, variable_name: &str) -> (u64, u64) {
+    pub fn find_symbol(&self, variable_name: &str) -> Result<(u64, u64), &'static str> {
         // let mut found_sym: Option<&ElfSymbol64> = None;
         // for (name, sym) in &self.symbols {
         //     if name == variable_name {
@@ -281,12 +282,15 @@ impl ElfFile {
         // (found_sym.unwrap().value, found_sym.unwrap().size)
 
         // TODO: don't unwrap!
-        let sym = self.symbols.get(variable_name).unwrap();
-        (sym.value, sym.size)
+        if let Some(sym) = self.symbols.get(variable_name) {
+            Ok((sym.value, sym.size))
+        } else {
+            Err("variable not found")
+        }
     }
 
     pub fn write_symbol(&mut self, variable_name: &str, data: &[u8]) -> Result<(), String> {
-        let (vaddr, size) = self.find_symbol(variable_name);
+        let (vaddr, size) = self.find_symbol(variable_name)?;
         for seg in &mut self.segments {
             if vaddr >= seg.virt_addr && vaddr + size <= seg.virt_addr + seg.data.len() as u64 {
                 let offset = (vaddr - seg.virt_addr) as usize;
