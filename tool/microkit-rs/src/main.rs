@@ -1001,7 +1001,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
                     system: &'a SystemDescription,
                     invocation_table_size: u64,
                     system_cnode_size: u64,
-                    search_paths: &Vec<&str>) -> BuiltSystem<'a> {
+                    search_paths: &Vec<&str>) -> Result<BuiltSystem<'a>, String> {
     assert!(util::is_power_of_two(system_cnode_size));
     assert!(invocation_table_size % kernel_config.minimum_page_size == 0);
     assert!(invocation_table_size <= MAX_SYSTEM_INVOCATION_SIZE);
@@ -2138,27 +2138,38 @@ fn build_system<'a>(kernel_config: &KernelConfig,
 
     for pd in &system.protection_domains {
         let elf = pd_elf_files.get_mut(pd).unwrap();
-        elf.write_symbol("microkit_name", pd.name.as_bytes());
-        elf.write_symbol("passive", &[pd.passive as u8]);
+        elf.write_symbol("microkit_name", pd.name.as_bytes())?;
+        elf.write_symbol("passive", &[pd.passive as u8])?;
     }
 
     for pd in &system.protection_domains {
         for setvar in &pd.setvars {
-            let mr = system.memory_regions.iter()
-                                          .find(|mr| mr.name == setvar.region_paddr)
-                                          .expect(format!("Cannot find region: {}", setvar.region_paddr).as_str());
-            let value = mr_pages[mr][0].phys_addr;
+            let value;
+            // TODO: fucked asserts
+            assert!(setvar.region_paddr.is_some() || setvar.vaddr.is_some());
+            assert!(!(setvar.region_paddr.is_some() && setvar.vaddr.is_some()));
+            if let Some(region_paddr) = &setvar.region_paddr {
+                let mr = system.memory_regions.iter()
+                                              .find(|mr| mr.name == *region_paddr)
+                                              .expect(format!("Cannot find region: {}", region_paddr).as_str());
+                value = mr_pages[mr][0].phys_addr;
+            } else if let Some(vaddr) = setvar.vaddr {
+                value = vaddr;
+            } else {
+                // TODO: remove this
+                panic!("INTERNAL ERROR");
+            }
 
-            // We assume that all the architectures we are dealing with are little-endian
             if let Some(elf) = pd_elf_files.get_mut(pd) {
-                elf.write_symbol(&setvar.symbol, &value.to_le_bytes());
+               // We assume that all the architectures we are dealing with are little-endian
+                elf.write_symbol(&setvar.symbol, &value.to_le_bytes())?;
             } else {
                 panic!("Unable to patch variable '{}' in protection domain '{}': variable not found.", setvar.symbol, pd.name);
             }
         }
     }
 
-    BuiltSystem {
+    Ok(BuiltSystem {
         number_of_system_caps: final_cap_slot,
         invocation_data_size: system_invocation_data.len() as u64,
         invocation_data: system_invocation_data,
@@ -2177,7 +2188,7 @@ fn build_system<'a>(kernel_config: &KernelConfig,
         kernel_objects,
         initial_task_phys_region,
         initial_task_virt_region,
-    }
+    })
 }
 
 fn print_usage() {
@@ -2280,7 +2291,7 @@ fn main() {
             invocation_table_size,
             system_cnode_size,
             &search_paths
-        );
+        ).expect("TODO");
         println!("BUILT: system_cnode_size={} built_system.number_of_system_caps={} invocation_table_size={} built_system.invocation_data_size={}",
                  system_cnode_size, built_system.number_of_system_caps, invocation_table_size, built_system.invocation_data_size);
 
@@ -2331,28 +2342,35 @@ fn main() {
     for o in &untyped_info_object_data {
         untyped_info_data.extend(unsafe { struct_to_bytes(o) });
     }
-    monitor_elf.write_symbol(monitor_config.untyped_info_symbol_name, &untyped_info_data);
+    monitor_elf.write_symbol(monitor_config.untyped_info_symbol_name, &untyped_info_data).expect("TODO");
 
     let mut bootstrap_invocation_data: Vec<u8> = Vec::new();
     for invocation in &built_system.bootstrap_invocations {
         invocation.add_raw_invocation(&mut bootstrap_invocation_data);
     }
 
-    monitor_elf.write_symbol(monitor_config.bootstrap_invocation_count_symbol_name, &built_system.bootstrap_invocations.len().to_le_bytes());
-    monitor_elf.write_symbol(monitor_config.system_invocation_count_symbol_name, &built_system.system_invocations.len().to_le_bytes());
-    monitor_elf.write_symbol(monitor_config.bootstrap_invocation_data_symbol_name, &bootstrap_invocation_data);
-
-    // TODO: sort out invocation data
+    monitor_elf.write_symbol(
+        monitor_config.bootstrap_invocation_count_symbol_name,
+        &built_system.bootstrap_invocations.len().to_le_bytes()
+    ).expect("TODO");
+    monitor_elf.write_symbol(
+        monitor_config.system_invocation_count_symbol_name,
+        &built_system.system_invocations.len().to_le_bytes()
+    ).expect("TODO");
+    monitor_elf.write_symbol(
+        monitor_config.bootstrap_invocation_data_symbol_name,
+        &bootstrap_invocation_data
+    ).expect("TODO");
 
     let tcb_cap_bytes: Vec<u8> = built_system.tcb_caps.iter().flat_map(|cap| cap.to_le_bytes()).collect();
     let sched_cap_bytes: Vec<u8> = built_system.sched_caps.iter().flat_map(|cap| cap.to_le_bytes()).collect();
     let ntfn_cap_bytes: Vec<u8> = built_system.ntfn_caps.iter().flat_map(|cap| cap.to_le_bytes()).collect();
 
-    monitor_elf.write_symbol("fault_ep", &built_system.fault_ep_cap_address.to_le_bytes());
-    monitor_elf.write_symbol("reply", &built_system.reply_cap_address.to_le_bytes());
-    monitor_elf.write_symbol("tcbs", &tcb_cap_bytes);
-    monitor_elf.write_symbol("scheduling_contexts", &sched_cap_bytes);
-    monitor_elf.write_symbol("notification_caps", &ntfn_cap_bytes);
+    monitor_elf.write_symbol("fault_ep", &built_system.fault_ep_cap_address.to_le_bytes()).expect("TODO");
+    monitor_elf.write_symbol("reply", &built_system.reply_cap_address.to_le_bytes()).expect("TODO");
+    monitor_elf.write_symbol("tcbs", &tcb_cap_bytes).expect("TODO");
+    monitor_elf.write_symbol("scheduling_contexts", &sched_cap_bytes).expect("TODO");
+    monitor_elf.write_symbol("notification_caps", &ntfn_cap_bytes).expect("TODO");
     // TODO: write out names
     let mut pd_names_bytes = vec![0; MAX_PDS * PD_MAX_NAME_LENGTH];
     for (i, pd) in system.protection_domains.iter().enumerate() {

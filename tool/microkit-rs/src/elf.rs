@@ -247,9 +247,11 @@ impl ElfFile {
             assert!(sym_head.is_empty(), "symbol data was not aligned");
             let sym = sym_body[0];
             let name = Self::get_string(symtab_str, sym.name as usize);
-            // TODO: check that symbol does not already exist
             // TODO: could potentially get rid of this allocation....
-            symbols.insert(name.to_string(), sym);
+            let insert = symbols.insert(name.to_string(), sym);
+            if insert.is_some() {
+                panic!("Multiple symbols with name '{}'", name);
+            }
             offset += symbol_size;
         }
 
@@ -283,16 +285,19 @@ impl ElfFile {
         (sym.value, sym.size)
     }
 
-    pub fn write_symbol(&mut self, variable_name: &str, data: &[u8]) {
+    pub fn write_symbol(&mut self, variable_name: &str, data: &[u8]) -> Result<(), String> {
         let (vaddr, size) = self.find_symbol(variable_name);
         for seg in &mut self.segments {
             if vaddr >= seg.virt_addr && vaddr + size <= seg.virt_addr + seg.data.len() as u64 {
                 let offset = (vaddr - seg.virt_addr) as usize;
                 assert!(data.len() as u64 <= size);
                 seg.data[offset..offset + data.len()].copy_from_slice(data);
+                return Ok(());
             }
         }
         // TODO: panic if we could not write the symbol?
+
+        Err(format!("No symbol named {} found", variable_name))
     }
 
     pub fn get_data(&self, vaddr: u64, size: u64) -> Option<&[u8]> {

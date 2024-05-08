@@ -92,12 +92,12 @@ pub struct SysIrq {
     pub trigger: ArmIrqTrigger,
 }
 
+// TODO: this is pretty weird since setvar is sometimes
+// has region paddr, sometimes vaddr, but never both
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SysSetVar {
     pub symbol: String,
-    pub region_paddr: String,
-    // TODO: this is never parsed in the Python tool,
-    // not sure what to do
+    pub region_paddr: Option<String>,
     pub vaddr: Option<u64>,
 }
 
@@ -238,7 +238,7 @@ impl ProtectionDomain {
                 "setvar" => {
                     check_attributes(&child, &["symbol", "region_paddr"]);
                     let symbol = checked_lookup(&child, "symbol").to_string();
-                    let region_paddr = checked_lookup(&child, "region_paddr").to_string();
+                    let region_paddr = Some(checked_lookup(&child, "region_paddr").to_string());
                     setvars.push(SysSetVar {
                         symbol,
                         region_paddr,
