@@ -736,7 +736,7 @@ def build_capdl_spec_add_tool(tool_target: Path, target_triple: str) -> None:
     # @ivanv: this should be cleaned up if we end up upstreaming it
     tool_build_dir = Path("tool/build").absolute()
     r = system(
-        f"cd capdl-initialiser/rust-seL4 && cargo build --release --target-dir {tool_build_dir} --target {target_triple} -p sel4-capdl-initializer-add-spec"
+        f"cd capdl-initialiser/rust-seL4 && cargo build -Zbuild-std --release --target-dir {tool_build_dir} --target {target_triple} -p sel4-capdl-initializer-add-spec"
     )
     assert r == 0
 
