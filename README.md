@@ -185,6 +185,7 @@ The currently supported configurations are:
 
 * release
 * debug
+* benchmark
 
 ## Supported Boards
 
@@ -192,11 +193,4 @@ For documentation on each supported board see the [manual](https://github.com/se
 
 ## Supported Configurations
 
-## Release
-
-In release configuration the loader, kernel and monitor do *not* perform any direct serial output.
-
-
-## Debug
-
-The debug configuration includes basic print output form the loader, kernel and monitor.
+For documentation on each supported board see the [manual](https://github.com/seL4/microkit/blob/main/docs/manual.md#configurations-config).
