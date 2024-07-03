@@ -547,9 +547,9 @@ fn kernel_partial_boot(kernel_config: &Config, kernel_elf: &ElfFile) -> KernelPa
     KernelPartialBootInfo { device_memory, normal_memory, boot_region }
 }
 
-fn emulate_kernel_boot_partial(kernel_config: &Config, kernel_elf: &ElfFile) -> DisjointMemoryRegion {
+fn emulate_kernel_boot_partial(kernel_config: &Config, kernel_elf: &ElfFile) -> (DisjointMemoryRegion, MemoryRegion) {
     let partial_info = kernel_partial_boot(kernel_config, kernel_elf);
-    partial_info.normal_memory
+    (partial_info.normal_memory, partial_info.boot_region)
 }
 
 fn get_n_paging(region: MemoryRegion, bits: u64) -> u64 {
@@ -724,12 +724,17 @@ fn build_system(kernel_config: &Config,
 
     // Now that the size is determined, find a free region in the physical memory
     // space.
-    let mut available_memory = emulate_kernel_boot_partial(kernel_config, kernel_elf);
+    let (mut available_memory, kernel_boot_region) = emulate_kernel_boot_partial(kernel_config, kernel_elf);
 
-    let reserved_base = available_memory.allocate(reserved_size);
-    let initial_task_phys_base = available_memory.allocate(initial_task_size);
-    // The kernel relies on this ordering. The previous allocation functions do *NOT* enforce
-    // this though, should fix that.
+    // The kernel relies on the reserved region being allocated above the kernel
+    // boot/ELF region, so we have the end of the kernel boot region as the lower
+    // bound for allocating the reserved region.
+    let reserved_base = available_memory.allocate_from(reserved_size, kernel_boot_region.end);
+    assert!(kernel_boot_region.base < reserved_base);
+    // The kernel relies on the initial task being allocated above the reserved
+    // region, so we have the address of the end of the reserved region as the
+    // lower bound for allocating the initial task.
+    let initial_task_phys_base = available_memory.allocate_from(initial_task_size, reserved_base + reserved_size);
     assert!(reserved_base < initial_task_phys_base);
 
     let initial_task_phys_region = MemoryRegion::new(initial_task_phys_base, initial_task_phys_base + initial_task_size);

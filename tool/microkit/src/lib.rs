@@ -199,11 +199,11 @@ impl DisjointMemoryRegion {
 
     /// Allocate region of 'size' bytes, returning the base address.
     /// The allocated region is removed from the disjoint memory region.
+    /// Allocation policy is simple first fit.
+    /// Possibly a 'best fit' policy would be better.
+    /// 'best' may be something that best matches a power-of-two
+    /// allocation
     pub fn allocate(&mut self, size: u64) -> u64 {
-        // Allocation policy is simple first fit.
-        // Possibly a 'best fit' policy would be better.
-        // 'best' may be something that best matches a power-of-two
-        // allocation
         let mut region_to_remove: Option<MemoryRegion> = None;
         for region in &self.regions {
             if size <= region.size() {
@@ -218,6 +218,24 @@ impl DisjointMemoryRegion {
                 region.base
             },
             None => panic!("Unable to allocate {} bytes", size)
+        }
+    }
+
+    pub fn allocate_from(&mut self, size: u64, lower_bound: u64) -> u64 {
+        let mut region_to_remove = None;
+        for region in &self.regions {
+            if size <= region.size() && region.base >= lower_bound {
+                region_to_remove = Some(*region);
+                break;
+            }
+        }
+
+        match region_to_remove {
+            Some(region) => {
+                self.remove_region(region.base, region.base + size);
+                region.base
+            },
+            None => panic!("Unable to allocate {} bytes from lower_bound 0x{:x}", size, lower_bound)
         }
     }
 }

@@ -205,3 +205,19 @@ static inline void microkit_vcpu_arm_write_reg(microkit_child vcpu, seL4_Word re
     }
 }
 #endif
+
+static inline void
+microkit_notify_delayed(microkit_channel ch)
+{
+  microkit_have_signal = seL4_True;
+  microkit_signal_msg = seL4_MessageInfo_new(0, 0, 0, 0);
+  microkit_signal_cap = (BASE_OUTPUT_NOTIFICATION_CAP + ch);
+}
+
+static inline void
+microkit_irq_ack_delayed(microkit_channel ch)
+{
+    microkit_have_signal = seL4_True;
+    microkit_signal_msg = seL4_MessageInfo_new(IRQAckIRQ, 0, 0, 0);
+    microkit_signal_cap = (BASE_IRQ_CAP + ch);
+}
