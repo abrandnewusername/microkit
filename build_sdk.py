@@ -309,6 +309,19 @@ SUPPORTED_BOARDS = (
         examples = {}
     ),
     BoardInfo(
+        name="odroidc4_no_hyp",
+        arch=BoardArch.AARCH64,
+        gcc_flags="GCC_CPU=cortex-a55",
+        loader_link_address=0x20000000,
+        kernel_options = {
+            "KernelPlatform": "odroidc4",
+            "KernelIsMCS": True,
+            "KernelIRQReporting": False,
+            "KernelRetypeFanOutLimit": 512,
+        },
+        examples = {}
+    ),
+    BoardInfo(
         name="rpi3b",
         arch=BoardArch.AARCH64,
         gcc_flags="GCC_CPU=cortex-a53",
