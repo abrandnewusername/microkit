@@ -164,7 +164,7 @@ putc(uint8_t ch)
     *UART_REG(TRANSMIT) = ch;
 }
 #elif defined(BOARD_imx8mm_evk) || \
-      defined(BOARD_imx8mm_evk_hyp) || \
+      defined(BOARD_imx8mm_evk_no_hyp) || \
       defined(BOARD_imx8mm_evk_2_cores) || \
       defined(BOARD_imx8mm_evk_4_cores) || \
       defined(BOARD_imx8mm_evk_4_cores_hyp)
