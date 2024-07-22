@@ -561,6 +561,14 @@ Write to a register for a given virtual CPU with ID `vcpu`. The `reg` argument i
 register that is written to. The `value` argument is what the register will be set to.
 The list of registers is defined by the enum `seL4_VCPUReg` in the seL4 source code.
 
+## `void microkit_arm_vspace_data_clean(uintptr_t start, uintptr_t end)`
+
+Clean cached data within a range of virtual addresses.
+
+## `void microkit_arm_vspace_data_invalidate(uintptr_t start, uintptr_t end)`
+
+Invalidate cached data given a range of virtual addresses.
+
 # System Description File {#sysdesc}
 
 This section describes the format of the System Description File (SDF).

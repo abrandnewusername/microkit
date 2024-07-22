@@ -15,6 +15,7 @@ typedef unsigned int microkit_channel;
 typedef unsigned int microkit_child;
 typedef seL4_MessageInfo_t microkit_msginfo;
 
+#define VSPACE_CAP 3
 #define MONITOR_EP 5
 #define BASE_OUTPUT_NOTIFICATION_CAP 10
 #define BASE_ENDPOINT_CAP 74
@@ -203,3 +204,51 @@ static inline void microkit_vcpu_arm_write_reg(microkit_child vcpu, seL4_Word re
     }
 }
 #endif
+
+#define ROUND_DOWN(n, b) (((n) >> (b)) << (b))
+#define LINE_START(a) ROUND_DOWN(a, CONFIG_L1_CACHE_LINE_SIZE_BITS)
+#define LINE_INDEX(a) (LINE_START(a) >> CONFIG_L1_CACHE_LINE_SIZE_BITS)
+
+static inline void
+microkit_arm_data_clean(seL4_Word start, seL4_Word end)
+{
+#if defined(CONFIG_AARCH64_USER_CACHE_ENABLE)
+    unsigned long line;
+    unsigned long index;
+
+    for (index = LINE_INDEX(start); index < LINE_INDEX(end) + 1; index++) {
+        line = index << CONFIG_L1_CACHE_LINE_SIZE_BITS;
+        asm volatile("dc cvac, %0" : : "r"(line));
+        asm volatile("dmb sy" ::: "memory");
+    }
+#else
+    seL4_Error err;
+    err = seL4_ARM_VSpace_Clean_Data(VSPACE_CAP, start, end);
+    if (err != seL4_NoError) {
+        microkit_dbg_puts("microkit_arm_data_clean: error cleaning cached data pages\n");
+        microkit_internal_crash(err);
+    }
+#endif
+}
+
+static inline void
+microkit_arm_data_invalidate(seL4_Word start, seL4_Word end)
+{
+#if defined(CONFIG_AARCH64_USER_CACHE_ENABLE)
+    unsigned long line;
+    unsigned long index;
+
+    for (index = LINE_INDEX(start); index < LINE_INDEX(end) + 1; index++) {
+        line = index << CONFIG_L1_CACHE_LINE_SIZE_BITS;
+        asm volatile("dc civac, %0" : : "r"(line));
+        asm volatile("dsb sy" ::: "memory");
+    }
+#else
+    seL4_Error err;
+    err = seL4_ARM_VSpace_Invalidate_Data(VSPACE_CAP, start, end);
+    if (err != seL4_NoError) {
+        microkit_dbg_puts("microkit_arm_data_invalidate: error invalidating cached data pages\n");
+        microkit_internal_crash(err);
+    }
+#endif
+}
