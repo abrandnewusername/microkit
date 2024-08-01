@@ -516,33 +516,39 @@ SUPPORTED_BOARDS = (
 )
 
 SUPPORTED_CONFIGS = (
-    ConfigInfo(
-        name="release",
-        debug=False,
-        kernel_options = {},
-    ),
-    ConfigInfo(
-        name="debug",
-        debug=True,
-        kernel_options = {
-            "KernelDebugBuild": True,
-            "KernelPrinting": True,
-            "KernelVerificationBuild": False
-        }
-    ),
-    # @ivanv: This has ARM specific kernel options
     # ConfigInfo(
-    #     name="benchmark",
+    #     name="release",
     #     debug=False,
     #     kernel_options = {
-    #         "KernelDebugBuild": False,
-    #         "KernelVerificationBuild": False,
-    #         "KernelBenchmarks": "track_utilisation",
-    #         "KernelArmExportPMUUser": True,
-    #         # Enable signal fastpath for sDDF benchmarking
-    #         "KernelSignalFastpath": True,
     #     },
     # ),
+    # ConfigInfo(
+    #     name="debug",
+    #     debug=True,
+    #     kernel_options = {
+    #         "KernelDebugBuild": True,
+    #         "KernelPrinting": True,
+    #         "KernelVerificationBuild": False,
+    #     }
+    # ),
+    # @ivanv: This has ARM specific kernel options
+    # @jade: I don't know if these are sufficient
+    ConfigInfo(
+        name="benchmark",
+        debug=False,
+        kernel_options = {
+            "KernelDebugBuild": False,
+            "KernelVerificationBuild": False,
+            "KernelBenchmarks": "track_utilisation",
+            # ARM PMU
+            # "KernelArmExportPMUUser": True,
+            # x86 PMU
+            "KernelExportPMCUser": True,
+            "KernelX86DangerousMSR": True,
+            # Enable signal fastpath for sDDF benchmarking
+            "KernelSignalFastpath": True,
+        },
+    ),
 )
 
 
@@ -557,7 +563,7 @@ def tar_filter(tarinfo: TarInfo) -> TarInfo:
     # This is unlikely to be set, but force it anyway
     tarinfo.pax_headers = {}
     tarinfo.mtime = MICROKIT_EPOCH
-    assert tarinfo.isfile() or tarinfo.isdir()
+    assert tarinfo.isfile() or tarinfo.isdir(), f"tarinfo: {tarinfo}"
     # Set the permissions properly
     if tarinfo.isdir():
         tarinfo.mode = tarinfo.mode & ~0o777 | 0o775
@@ -736,7 +742,7 @@ def build_capdl_spec_add_tool(tool_target: Path, target_triple: str) -> None:
     # @ivanv: this should be cleaned up if we end up upstreaming it
     tool_build_dir = Path("tool/build").absolute()
     r = system(
-        f"cd capdl-initialiser/rust-seL4 && cargo build -Zbuild-std --release --target-dir {tool_build_dir} --target {target_triple} -p sel4-capdl-initializer-add-spec"
+        f"cd capdl-initialiser/rust-seL4 && cargo build --release --target-dir {tool_build_dir} -p sel4-capdl-initializer-add-spec"
     )
     assert r == 0
 
@@ -831,11 +837,13 @@ def build_lib_component(
     else:
         raise Exception(f"Unexpected arch given: {board.arch}", board.arch)
 
+    arch_args += f" CONFIG={config.name}"
+
     build_cmd = f"BUILD_DIR={build_dir.absolute()} {arch_args} {board.gcc_flags} SEL4_SDK={sel4_dir.absolute()} make -C {component_name}"
     r = system(build_cmd)
     if r != 0:
         raise Exception(
-            f"Error building: {component_name} for board: {board.name} config: {config.name}"
+            f"Error building: {component_name} for board: {board.name} config: {config.name} build_cmd: {build_cmd}"
         )
     lib = build_dir / f"{component_name}.a"
     lib_dir = root_dir / "board" / board.name / config.name / "lib"

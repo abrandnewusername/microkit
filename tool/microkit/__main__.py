@@ -908,7 +908,14 @@ def generate_capdl(system: SystemDescription, search_paths: List[Path], kernel_c
 
         # The monitor needs access to the TCB of each PD
         # @ivanv
-
+        cspace[TCB_CAP_IDX] = capdl.Cap(tcb)
+        for child_pd in system.protection_domains:
+        # for child_pd in pd.child_pds:
+            if child_pd.id_:
+                child_pd_elf = capdl.ELF(str(path), name=child_pd.name, arch=capdl_arch)
+                child_pd_elf_spec = child_pd_elf.get_spec(infer_asid=False)
+                child_pd_tcb = next(x for x in child_pd_elf_spec.objs if isinstance(x, capdl.TCB))
+                cspace[BASE_TCB_CAP + child_pd.id_] = capdl.Cap(child_pd_tcb)
         # FIXME: this modifies the input elfs
         # with open(path, "r+b") as f:
         #     for setvar in pd.setvars:

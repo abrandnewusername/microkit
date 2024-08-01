@@ -15,6 +15,10 @@ ifeq ($(strip $(ARCH)),)
 $(error ARCH must be specified)
 endif
 
+ifeq ($(strip $(CONFIG)),)
+$(error CONFIG must be specified)
+endif
+
 # ifeq ($(strip $(TOOLCHAIN)),)
 # $(error TOOLCHAIN must be specified)
 # endif
