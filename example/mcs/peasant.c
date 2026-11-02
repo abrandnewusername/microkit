@@ -17,7 +17,7 @@ void do_work(void)
 
 void init(void)
 {
-    microkit_dbg_puts("peasant, starting\n");
+    // microkit_dbg_puts("peasant, starting\n");
     do_work();
 }
 

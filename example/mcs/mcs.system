@@ -10,23 +10,27 @@
         <program_image path="feudal_lord.elf" />
 
         <!-- tasks that require fast response to IRQ or notification, 1 sc -->
-        <protection_domain name="fast_rt" priority="244" id="1">
+        <protection_domain name="fast_rt" priority="244" budget="3_000" period="200_000"  id="1">
             <program_image path="fast_rt.elf" />
         </protection_domain>
 
         <!-- critical tasks with hard deadlines, 1 sc -->
-        <protection_domain name="hard_rt" priority="234" id="2">
+        <protection_domain name="hard_rt" priority="234" budget="10_000" period="200_000"  id="2">
             <program_image path="hard_rt.elf" />
         </protection_domain>
 
         <!-- soft deadlines, 1-3 sc -->
-        <protection_domain name="soft_rt" priority="224" id="3">
+        <protection_domain name="soft_rt_3" priority="224" budget="20_000" period="200_000"  id="3">
+            <program_image path="soft_rt.elf" />
+        </protection_domain>
+
+        <protection_domain name="soft_rt_4" priority="224" budget="20_000" period="200_000"  id="4">
             <program_image path="soft_rt.elf" />
         </protection_domain>
 
         <!-- best-effort tasks, as many as you wants (or maybe just 20-50 sc) -->
 
-        <!-- 1 - 9 -->
+        <!-- 1 - 10 -->
         <protection_domain name="peasant_21" priority="99" budget="100_000" period="100_000"  id="21">
             <program_image path="peasant.elf" />
         </protection_domain>
@@ -67,7 +71,7 @@
             <program_image path="peasant.elf" />
         </protection_domain>
 
-        <!-- 10 -19 -->
+        <!-- 11 - 20 -->
         <protection_domain name="peasant_31" priority="99" budget="100_000" period="100_000"  id="31">
             <program_image path="peasant.elf" />
         </protection_domain>
@@ -108,6 +112,7 @@
             <program_image path="peasant.elf" />
         </protection_domain>
 
+        <!-- 21 - 30 -->
         <protection_domain name="peasant_41" priority="99" budget="100_000" period="100_000"  id="41">
             <program_image path="peasant.elf" />
         </protection_domain>
@@ -148,6 +153,7 @@
             <program_image path="peasant.elf" />
         </protection_domain>
 
+        <!-- 31 - 40 -->
         <protection_domain name="peasant_51" priority="99" budget="100_000" period="100_000"  id="51">
             <program_image path="peasant.elf" />
         </protection_domain>
@@ -188,6 +194,7 @@
             <program_image path="peasant.elf" />
         </protection_domain>
 
+        <!-- 41 - 50 -->
         <protection_domain name="peasant_61" priority="99" budget="100_000" period="100_000"  id="61">
             <program_image path="peasant.elf" />
         </protection_domain>
