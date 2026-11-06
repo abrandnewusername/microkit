@@ -5,6 +5,65 @@
  */
 #include <stdint.h>
 #include <microkit.h>
+#include <sel4/benchmark_track_types.h>
+#include <sel4/benchmark_utilisation_types.h>
+
+#define UART_CH 1
+
+uint64_t com1_ioport_id;
+uint64_t com1_ioport_addr;
+
+#define BIT(nr)           (1 << nr)
+
+#define SERIAL_THR  0 /* Transmitter Holding Buffer (W ) DLAB = 0 */
+#define SERIAL_RBR  0 /* Receiver Buffer            (R ) DLAB = 0 */
+#define SERIAL_DLL  0 /* Divisor Latch Low Byte     (RW) DLAB = 1 */
+#define SERIAL_IER  1 /* Interrupt Enable Register  (RW) DLAB = 0 */
+#define SERIAL_DLH  1 /* Divisor Latch High Byte    (RW) DLAB = 1 */
+#define SERIAL_IIR  2 /* Interrupt Identification   (R ) */
+#define SERIAL_FCR  2 /* FIFO Control Register      (W ) */
+#define SERIAL_LCR  3 /* Line Control Register      (RW) */
+#define SERIAL_MCR  4 /* Modem Control Register     (RW) */
+#define SERIAL_LSR  5 /* Line Status Register       (R ) */
+#define SERIAL_MSR  6 /* Modem Status Register      (R ) */
+#define SERIAL_SR   7 /* Scratch Register           (RW) */
+#define SERIAL_DLAB BIT(7)
+#define SERIAL_LSR_DATA_READY BIT(0)
+#define SERIAL_LSR_TRANSMITTER_EMPTY BIT(5)
+
+
+void write(uint16_t port_offset, uint8_t v)
+{
+    microkit_x86_ioport_write_8((com1_ioport_id), com1_ioport_addr + port_offset, v);
+}
+
+uint8_t read(uint16_t port_offset)
+{
+    return microkit_x86_ioport_read_8((com1_ioport_id), com1_ioport_addr + port_offset);
+}
+
+int tx_ready(void)
+{
+    return read(SERIAL_LSR) & SERIAL_LSR_TRANSMITTER_EMPTY;
+}
+
+static inline void uart_putchar(char ch)
+{
+    // Danger: may overflow hardware FIFO, but we are only writing a small message.
+    microkit_x86_ioport_write_8(com1_ioport_id, com1_ioport_addr, ch);
+}
+
+static inline void uart_putchars(const char *s)
+{
+    while (*s) {
+        if (*s == '\n') {
+            while (!tx_ready());
+            uart_putchar('\r');
+        }
+        while (!tx_ready());
+        uart_putchar(*s++);
+    }
+}
 
 /* [1] "Vendor Identification String" page "3-240 Vol. 2A" */
 #define CPUID_VENDOR_ID_LEAF 0x0
@@ -26,8 +85,6 @@
 #define CPUID_INVARIANT_TSC_EDX_BIT 8
 
 #define ONE_GHZ (1ULL * (1000ULL * 1000ULL * 1000ULL))
-
-#define BIT(nr) (1UL << (nr))
 
 static inline void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -74,7 +131,7 @@ static void put64(uint64_t x)
         tmp[--i] = decchar(c);
         x /= 10;
     } while (x);
-    microkit_dbg_puts(&tmp[i]);
+    uart_putchars(&tmp[i]);
 }
 
 static inline uint64_t period_transform(uint64_t period, uint64_t input_freq)
@@ -135,56 +192,131 @@ static uint64_t get_tsc_frequency(void)
     return tsc_hz;
 }
 
+#ifdef CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES
+
+#define LOG_BUFFER_CAP 7
+
+benchmark_track_kernel_entry_t *log_buffer;
+
+static void dump_log_summary(uint64_t log_size)
+{
+    seL4_Word index = 0;
+    uint64_t freq = get_tsc_frequency();
+    uart_putchars("log size: ");
+    put64(log_size);
+    uart_putchars("\n");
+    while (log_buffer[index].start_time != 0 && index < log_size) {
+
+        if (log_buffer[index].entry.path == Entry_Syscall) {
+            uart_putchars("syscall ");
+            put64(log_buffer[index].entry.syscall_no);
+            uart_putchars(",");
+        } else if (log_buffer[index].entry.path == Entry_Interrupt) {
+            uart_putchars("interrupt, ");
+        } else if (log_buffer[index].entry.path == Entry_UserLevelFault) {
+            uart_putchars("userlevelfault, ");
+        } else if (log_buffer[index].entry.path == Entry_VMFault) {
+            uart_putchars("vmfault, ");
+        } else if (log_buffer[index].entry.path == Entry_DebugFault) {
+            uart_putchars("debug, ");
+        } else {
+            uart_putchars("others, ");
+        }
+
+        put64(period_transform(log_buffer[index].start_time, freq));
+
+        uart_putchars(", ");
+        put64(period_transform(log_buffer[index].duration, freq));
+
+        uart_putchars("\n");
+
+        index++;
+    }
+        uart_putchars("\n");
+
+}
+
+void kernel_benchmark_init(void)
+{
+    int res_buf = seL4_BenchmarkSetLogBuffer(7);
+    if (res_buf) {
+        uart_putchars("monitor: Could not set log buffer\n");
+    } else {
+        // uart_putchars("monitor: Log buffer set\n");
+        return;
+    }
+}
+
+#endif
+
 void init(void)
 {
     // microkit_pd_stop(1);
     // microkit_pd_stop(2);
     // microkit_pd_stop(3);
 
+// #if !ENABLE_BENCHMARKS
+//     uart_putchars("monitor: ENABLE_BENCHMARKS is disabled\n");
+//     return;
+// #endif
+
+    while (!(read(SERIAL_LSR) & 0x60)); /* wait until not busy */
+
+    write(SERIAL_LCR, 0x00); /* line control register: command: set divisor */
+
+    write(SERIAL_IER, 0x00); /* disable generating interrupts */
+
+    write(SERIAL_LCR, 0x80); /* line control register: command: set divisor */
+    write(SERIAL_DLL, 0x01); /* set low byte of divisor to 0x01 = 115200 baud */
+    write(SERIAL_DLH, 0x00); /* set high byte of divisor to 0x00 */
+    write(SERIAL_LCR, 0x03); /* line control register: set 8 bit, no parity, 1 stop bit */
+    write(SERIAL_MCR, 0x0b); /* modem control register: set DTR/RTS/OUT2 */
+    write(SERIAL_FCR, 0x00); /* set IRQ trigger level to 1 byte */
+
+    read(SERIAL_RBR); /* clear receiver port */
+    read(SERIAL_LSR); /* clear line status port */
+    read(SERIAL_MSR); /* clear modem status port */
+
+#if !CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES
+    uart_putchars("monitor: CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES is disabled\n");
+    return;
+#endif
+
+#ifdef CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES
+    kernel_benchmark_init();
+#endif
+
     if (!is_invariant_tsc()) {
-        microkit_dbg_puts("monitor: is_invariant_tsc fails...");
+
+        uart_putchars("monitor: is_invariant_tsc fails...");
     }
 
     uint64_t freq = get_tsc_frequency();
 
-    microkit_dbg_puts("monitor: starting, timestamp: ");
+    uart_putchars("monitor: starting, timestamp: ");
     put64(period_transform(rdtsc(), freq));
-
-    microkit_dbg_puts(", frequency: ");
+    
+    uart_putchars(", frequency: ");
     put64(freq);
-    microkit_dbg_puts("\n");
+    uart_putchars("\n");
 
-    // int i = 0;
-    // for (;i < (1 << 8); i++) {
-    //     rdtsc();
-    // }
+    seL4_BenchmarkResetLog();
 }
 
 void notified(microkit_channel ch)
 {
+#ifdef CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES
+    uint64_t entries = seL4_BenchmarkFinalizeLog();
+    dump_log_summary(entries);
+
+    seL4_BenchmarkResetLog();
+#endif
 }
 
 seL4_MessageInfo_t protected(microkit_channel ch, microkit_msginfo msginfo)
 {
-    microkit_dbg_puts("monitor: received protected message\n");
+    uart_putchars("monitor: received protected message\n");
 
     return microkit_msginfo_new(0, 0);
 }
 
-// seL4_Bool fault(microkit_child child, microkit_msginfo msginfo, microkit_msginfo *reply_msginfo)
-// {
-//     microkit_dbg_puts("restarter: received fault message for child pd: ");
-//     put8(child);
-//     microkit_dbg_puts("\n");
-//     restart_count++;
-//     if (restart_count < 10) {
-//         microkit_pd_restart(child, 0x200000);
-//         microkit_dbg_puts("restarter: restarted\n");
-//     } else {
-//         microkit_pd_stop(child);
-//         microkit_dbg_puts("restarter: too many restarts - PD stopped\n");
-//     }
-
-//     /* We explicitly restart the thread so we do not need to 'reply' to the fault. */
-//     return seL4_False;
-// }

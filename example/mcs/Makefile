@@ -49,12 +49,11 @@ endif
 MICROKIT_TOOL ?= $(MICROKIT_SDK)/bin/microkit
 
 FEUDAL_LORD_OBJS := feudal_lord.o
-HARD_RT_OBJS := hard_rt.o
-SOFT_RT_OBJS := soft_rt.o
-FAST_RT_OBJS := fast_rt.o
+RT_OBJS := rt.o
 PEASANT_OBJS := peasant.o
+UART_OBJS := uart.o
 
-IMAGES := feudal_lord.elf hard_rt.elf soft_rt.elf fast_rt.elf peasant.elf
+IMAGES := feudal_lord.elf rt.elf peasant.elf uart.elf
 CFLAGS := -nostdlib -ffreestanding -g -O3 -Wall  -Wno-unused-function -Werror -I$(BOARD_DIR)/include $(CFLAGS_ARCH)
 LDFLAGS := -L$(BOARD_DIR)/lib
 LIBS := -lmicrokit -Tmicrokit.ld
@@ -70,16 +69,13 @@ $(BUILD_DIR)/%.o: %.c Makefile
 $(BUILD_DIR)/%.o: %.s Makefile
 	$(AS) -g -mcpu=$(CPU) $< -o $@
 
+$(BUILD_DIR)/uart.elf: $(addprefix $(BUILD_DIR)/, $(UART_OBJS))
+	$(LD) $(LDFLAGS) $^ $(LIBS) -o $@
+
 $(BUILD_DIR)/feudal_lord.elf: $(addprefix $(BUILD_DIR)/, $(FEUDAL_LORD_OBJS))
 	$(LD) $(LDFLAGS) $^ $(LIBS) -o $@
 
-$(BUILD_DIR)/hard_rt.elf: $(addprefix $(BUILD_DIR)/, $(HARD_RT_OBJS))
-	$(LD) $(LDFLAGS) $^ $(LIBS) -o $@
-
-$(BUILD_DIR)/soft_rt.elf: $(addprefix $(BUILD_DIR)/, $(SOFT_RT_OBJS))
-	$(LD) $(LDFLAGS) $^ $(LIBS) -o $@
-
-$(BUILD_DIR)/fast_rt.elf: $(addprefix $(BUILD_DIR)/, $(FAST_RT_OBJS))
+$(BUILD_DIR)/rt.elf: $(addprefix $(BUILD_DIR)/, $(RT_OBJS))
 	$(LD) $(LDFLAGS) $^ $(LIBS) -o $@
 
 $(BUILD_DIR)/peasant.elf: $(addprefix $(BUILD_DIR)/, $(PEASANT_OBJS))

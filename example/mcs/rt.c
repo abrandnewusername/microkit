@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <microkit.h>
 
+// ===================== user-level tsc read =========================
 /* [1] "Vendor Identification String" page "3-240 Vol. 2A" */
 #define CPUID_VENDOR_ID_LEAF 0x0
 #define CPUID_VENDOR_ID_INTEL_EBX 0x756e6547 // "Genu"
@@ -135,26 +136,37 @@ static uint64_t get_tsc_frequency(void)
     return tsc_hz;
 }
 
-void do_work(void)
+// ===================== rt implementation =========================
+
+int do_work(void)
 {
     int i = 0;
+    uint64_t tsc;
+
     for (;;) {
         i++;
+        tsc = rdtsc();
+        if (tsc == 0){
+            break;
+        }
     }
-    return;
+    return i;
 }
 
 void init(void)
 {
-    uint64_t tsc = rdtsc();
-    uint64_t freq = get_tsc_frequency();
+    // uint64_t tsc = rdtsc();
+    // uint64_t freq = get_tsc_frequency();
 
-    microkit_dbg_puts(microkit_name);
-    microkit_dbg_puts(": timestamp: ");
-    put64(period_transform(tsc, freq));
-    microkit_dbg_puts("\n");
+    // microkit_dbg_puts(microkit_name);
+    // microkit_dbg_puts(": timestamp: ");
+    // put64(period_transform(tsc, freq));
+    // microkit_dbg_puts("\n");
 
-    do_work();
+    if (microkit_name[8] == '3') {
+        microkit_notify(0);
+    }
+    put64(do_work());
 }
 
 void notified(microkit_channel ch)
