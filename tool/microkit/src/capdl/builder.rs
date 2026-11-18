@@ -586,6 +586,7 @@ pub fn build_capdl_spec(
     // Step 2. Create the memory regions' spec. Result is a hashmap keyed on MR name, value is (parsed XML obj, Vec of frame object IDs)
     // *********************************
     let mut mr_name_to_frames: BTreeMap<&str, Vec<ObjectId>> = BTreeMap::new();
+    let mut logbuffer_caps = Vec::new();
     for mr in system.memory_regions.iter() {
         let mut frame_ids = Vec::new();
         let frame_size_bits = mr.page_size.fixed_size_bits(kernel_config);
@@ -640,14 +641,29 @@ pub fn build_capdl_spec(
                     entries: [].to_vec(),
                 }
             };
+            // probably here
+            if mr.name == "logbuffer" {
+                let frame_obj_id = capdl_util_make_frame_obj(
+                    &mut spec_container,
+                    frame_fill,
+                    &format!("mr_{}_{:09}", mr.name, frame_sequence),
+                    paddr,
+                    frame_size_bits as u8,
+                ); 
+                frame_ids.push(frame_obj_id);
 
-            frame_ids.push(capdl_util_make_frame_obj(
-                &mut spec_container,
-                frame_fill,
-                &format!("mr_{}_{:09}", mr.name, frame_sequence),
-                paddr,
-                frame_size_bits as u8,
-            ));
+                let logbuf_frame_cap =
+                capdl_util_make_frame_cap(frame_obj_id, true, true, false, false);
+                logbuffer_caps.push(logbuf_frame_cap);
+            } else {
+                frame_ids.push(capdl_util_make_frame_obj(
+                    &mut spec_container,
+                    frame_fill,
+                    &format!("mr_{}_{:09}", mr.name, frame_sequence),
+                    paddr,
+                    frame_size_bits as u8,
+                ));
+            }
         }
 
         mr_name_to_frames.insert(&mr.name, frame_ids);
@@ -1165,6 +1181,14 @@ pub fn build_capdl_spec(
             },
         );
     }
+
+    if !logbuffer_caps.is_empty() {
+        pd_shadow_cspaces["feudal_lord"].insert_cap_into_microkit_cnode(
+            &mut spec_container,
+            7,
+            logbuffer_caps.pop().unwrap(),
+        );
+    }   
 
     // *********************************
     // Step 4. Postprocessing steps for PDs

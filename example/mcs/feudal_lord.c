@@ -201,39 +201,76 @@ benchmark_track_kernel_entry_t *log_buffer;
 static void dump_log_summary(uint64_t log_size)
 {
     seL4_Word index = 0;
+    seL4_Word irq_index = 0;
+    seL4_Word prev_start_time = 0;
+
+    seL4_Word wc_timeout = 0;
+    seL4_Word wc_preempt = 0;
+
+    seL4_Word timeout_index = 0;
+    seL4_Word preempt_index = 0;
+
     uint64_t freq = get_tsc_frequency();
-    uart_putchars("log size: ");
-    put64(log_size);
-    uart_putchars("\n");
+
+
     while (log_buffer[index].start_time != 0 && index < log_size) {
+        seL4_Word exec_time_us = period_transform(log_buffer[index].start_time - prev_start_time, freq);
+        
+        if ((log_buffer[index].entry.path == Entry_Interrupt) && 
+            (exec_time_us > 990000)) {
 
-        if (log_buffer[index].entry.path == Entry_Syscall) {
-            uart_putchars("syscall ");
-            put64(log_buffer[index].entry.syscall_no);
-            uart_putchars(",");
-        } else if (log_buffer[index].entry.path == Entry_Interrupt) {
-            uart_putchars("interrupt, ");
-        } else if (log_buffer[index].entry.path == Entry_UserLevelFault) {
-            uart_putchars("userlevelfault, ");
-        } else if (log_buffer[index].entry.path == Entry_VMFault) {
-            uart_putchars("vmfault, ");
-        } else if (log_buffer[index].entry.path == Entry_DebugFault) {
-            uart_putchars("debug, ");
-        } else {
-            uart_putchars("others, ");
+            if (index > 4000 && index < 4200) {
+                uart_putchars("[");
+                put64(irq_index);
+                uart_putchars("]: ");
+    
+                put64(exec_time_us);
+    
+                uart_putchars(", ");
+                put64(period_transform(log_buffer[index].duration, freq));
+    
+                uart_putchars("\n");
+            }
+
+            irq_index++;
+            prev_start_time = log_buffer[index].start_time;
+
+            // highest prio partial budget thread, will expire
+            if (exec_time_us > 2950000 && exec_time_us < 3050000){
+                if (wc_timeout < period_transform(log_buffer[index].duration, freq)) {
+                    wc_timeout = period_transform(log_buffer[index].duration, freq);
+                }
+                timeout_index++;
+
+            // full budget background thread, only gets preempted
+            } else if (exec_time_us > 1050000)  {
+
+                if (wc_preempt < period_transform(log_buffer[index].duration, freq)) {
+                    wc_preempt = period_transform(log_buffer[index].duration, freq);
+                }
+                preempt_index++;
+            }
         }
-
-        put64(period_transform(log_buffer[index].start_time, freq));
-
-        uart_putchars(", ");
-        put64(period_transform(log_buffer[index].duration, freq));
-
-        uart_putchars("\n");
 
         index++;
     }
         uart_putchars("\n");
+        uart_putchars("Total: ");
+        put64(index);
+        uart_putchars("\n");
 
+
+        uart_putchars("WC preempt: ");
+        put64(wc_preempt);
+        uart_putchars(", # preempt: ");
+        put64(preempt_index);
+        uart_putchars("\n");
+
+        uart_putchars("WC timeout: ");
+        put64(wc_timeout);
+        uart_putchars(", # timeout: ");
+        put64(timeout_index);
+        uart_putchars("\n");
 }
 
 void kernel_benchmark_init(void)

@@ -483,18 +483,19 @@ SUPPORTED_BOARDS = (
 
 # These then get elaborated into smp-release, smp-benchmark, and smp-debug
 SUPPORTED_CONFIGS = (
-    ConfigInfo(
-        name="release",
-        debug=False,
-        kernel_options={},
-        kernel_options_arch={},
-    ),
+    # ConfigInfo(
+    #     name="release",
+    #     debug=False,
+    #     kernel_options={},
+    #     kernel_options_arch={},
+    # ),
     ConfigInfo(
         name="debug",
         debug=True,
         kernel_options={
             "KernelDebugBuild": True,
             "KernelPrinting": True,
+            "KernelBenchmarks": "track_kernel_entries",
             "KernelVerificationBuild": False
         },
         kernel_options_arch={
@@ -503,6 +504,9 @@ SUPPORTED_CONFIGS = (
             },
             KernelArch.X86_64: {
                 "HardwareDebugAPI": True,
+                "KernelExportPMCUser": True,
+                "KernelX86DangerousMSR": True,
+                # "KernelPC99TSCFrequency": 3299999934,
             }
         },
     ),
@@ -512,7 +516,7 @@ SUPPORTED_CONFIGS = (
         kernel_options={
             "KernelDebugBuild": False,
             "KernelVerificationBuild": False,
-            "KernelBenchmarks": "track_utilisation",
+            "KernelBenchmarks": "track_kernel_entries",
             "KernelSignalFastpath": True,
         },
         kernel_options_arch={
@@ -522,6 +526,8 @@ SUPPORTED_CONFIGS = (
             KernelArch.X86_64: {
                 "KernelExportPMCUser": True,
                 "KernelX86DangerousMSR": True,
+                # "KernelPC99TSCFrequency": 3299999934, # vb_105
+                "KernelPC99TSCFrequency": 3399999862, # skylake
             }
         },
     ),

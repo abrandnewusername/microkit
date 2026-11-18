@@ -138,7 +138,11 @@ static uint64_t get_tsc_frequency(void)
 
 // ===================== rt implementation =========================
 
-int do_work(void)
+uint64_t init_tsc;
+uint64_t init_freq;
+
+
+void do_work(void)
 {
     int i = 0;
     uint64_t tsc;
@@ -146,27 +150,29 @@ int do_work(void)
     for (;;) {
         i++;
         tsc = rdtsc();
-        if (tsc == 0){
+        if (period_transform(tsc - init_tsc, init_freq) > ((uint64_t)(80000 * 1000) * 1000)){
+            if (microkit_name[0] == 'h') {
+                microkit_notify(0);
+            }
             break;
         }
     }
-    return i;
 }
 
 void init(void)
 {
-    // uint64_t tsc = rdtsc();
-    // uint64_t freq = get_tsc_frequency();
+    init_tsc = rdtsc();
+    init_freq = get_tsc_frequency();
 
     // microkit_dbg_puts(microkit_name);
     // microkit_dbg_puts(": timestamp: ");
     // put64(period_transform(tsc, freq));
     // microkit_dbg_puts("\n");
 
-    if (microkit_name[8] == '3') {
-        microkit_notify(0);
-    }
-    put64(do_work());
+    // if (microkit_name[8] == '3') {
+    //     microkit_notify(0);
+    // }
+    do_work();
 }
 
 void notified(microkit_channel ch)

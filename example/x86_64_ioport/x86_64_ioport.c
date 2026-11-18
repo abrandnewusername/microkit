@@ -27,11 +27,11 @@ static inline void serial_puts(const char *s)
 
 void init(void)
 {
-    microkit_dbg_puts("hello, world. my name is ");
-    microkit_dbg_puts(microkit_name);
-    microkit_dbg_puts("\n");
+    // microkit_dbg_puts("hello, world. my name is ");
+    // microkit_dbg_puts(microkit_name);
+    // microkit_dbg_puts("\n");
 
-    microkit_dbg_puts("Now writing to serial I/O port: ");
+    // microkit_dbg_puts("Now writing to serial I/O port: ");
     serial_puts("hello!\n");
 }
 
